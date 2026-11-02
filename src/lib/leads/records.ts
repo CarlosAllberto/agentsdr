@@ -350,6 +350,7 @@ type PersonListInput = {
   campaignChannel?: "email" | "linkedin" | "unassigned";
   hasEmail?: boolean;
   hasLinkedin?: boolean;
+  hasPhone?: boolean;
   sort?: "name" | "title" | "email" | "company" | "updated" | "created";
   direction?: "asc" | "desc";
   crmCategory?: "customer" | "interested" | "not_interested" | "other";
@@ -396,6 +397,7 @@ export async function listPeoplePage(input: PersonListInput = {}) {
     term ? or(ilike(people.email, term), ilike(people.linkedinUrl, term), ilike(people.fullName, term), ilike(people.title, term), ilike(companies.name, term), ilike(companies.domain, term), sql`${people.raw}::text ilike ${term}`, sql`${people.custom}::text ilike ${term}`) : undefined,
     input.hasEmail === true ? sql`${people.email} is not null` : undefined,
     input.hasLinkedin === true ? sql`${people.linkedinUrl} is not null` : undefined,
+    input.hasPhone === true ? sql`${people.phone} is not null` : undefined,
     input.campaignChannel === "email" ? exists(db.select({ id: outreachLeads.id }).from(outreachLeads).where(eq(outreachLeads.personId, people.id))) : undefined,
     input.campaignChannel === "linkedin" ? exists(db.select({ id: linkedinLeads.id }).from(linkedinLeads).where(eq(linkedinLeads.personId, people.id))) : undefined,
     input.campaignChannel === "unassigned"

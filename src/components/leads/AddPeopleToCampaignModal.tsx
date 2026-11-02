@@ -42,6 +42,9 @@ export default function AddPeopleToCampaignModal({
       try {
         const params = new URLSearchParams({ limit: "100" });
         if (query.trim()) params.set("q", query.trim());
+        // Only people the channel can reach: filtering the first page here instead
+        // left a WhatsApp picker empty when few people had a phone (10 of 43k, 2 Nov 2026).
+        params.set(channel === "email" ? "hasEmail" : channel === "whatsapp" ? "hasPhone" : "hasLinkedin", "true");
         const response = await fetch(`/api/leads/people?${params}`, { signal: controller.signal });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error ?? "Could not load people");
@@ -56,7 +59,7 @@ export default function AddPeopleToCampaignModal({
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [query]);
+  }, [query, channel]);
 
   async function submit() {
     setSaving(true);

@@ -28,6 +28,7 @@ async function listPeople(req: NextRequest) {
     campaignChannel: campaignChannel === "email" || campaignChannel === "linkedin" || campaignChannel === "unassigned" ? campaignChannel : undefined,
     hasEmail: req.nextUrl.searchParams.get("hasEmail") === "true" ? true : undefined,
     hasLinkedin: req.nextUrl.searchParams.get("hasLinkedin") === "true" ? true : undefined,
+    hasPhone: req.nextUrl.searchParams.get("hasPhone") === "true" ? true : undefined,
     sort: sort === "name" || sort === "title" || sort === "email" || sort === "company" || sort === "updated" || sort === "created" ? sort : undefined,
     direction: direction === "asc" || direction === "desc" ? direction : undefined,
     crmCategory: crmCategory === "customer" || crmCategory === "interested" || crmCategory === "not_interested" || crmCategory === "other" ? crmCategory : undefined,
