@@ -20,7 +20,7 @@ import { AiAgentBadge, AiCampaignStateBadge, errorText } from "./aiShared";
 export const NEW_AI_CAMPAIGN_HREF = "/calling/campaigns/ai/new";
 const num = "text-paragraph-sm tabular-nums text-text-strong-950";
 
-/** The AI agent campaigns, listed above the rep campaigns on the Call campaigns page. */
+/** The AI agent campaigns: the Call campaigns page's list. */
 export function AiCampaignsSection() {
   const router = useRouter();
   const [campaigns, setCampaigns] = useState<AiCampaignSummary[] | null>(null);
@@ -48,7 +48,7 @@ export function AiCampaignsSection() {
         title="AI agent campaigns"
         description="The agent calls the leads itself from your calling numbers, follows up on WhatsApp, and hands over interested people."
         actions={
-          <Button.Root variant="neutral" mode="stroke" size="small" onClick={() => router.push(NEW_AI_CAMPAIGN_HREF)}>
+          <Button.Root variant="primary" mode="filled" size="small" onClick={() => router.push(NEW_AI_CAMPAIGN_HREF)}>
             <Button.Icon as={RiAddLine} />
             New AI campaign
           </Button.Root>

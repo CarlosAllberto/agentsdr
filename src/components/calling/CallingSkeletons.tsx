@@ -1,4 +1,4 @@
-import { KpiStripSkeleton, PageHeaderSkeleton, Skeleton, TableSkeleton } from "@/components/page/Skeletons";
+import { PageHeaderSkeleton, Skeleton, TableSkeleton } from "@/components/page/Skeletons";
 
 /*
  * The page kit's ListPageSkeleton / DetailPageSkeleton, minus their
@@ -10,8 +10,7 @@ export function CallingListSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading" className="mx-auto w-full max-w-[1440px] space-y-6">
       <PageHeaderSkeleton />
-      <KpiStripSkeleton cells={5} />
-      <TableSkeleton rows={4} columns={8} />
+      <TableSkeleton rows={4} columns={7} />
     </div>
   );
 }

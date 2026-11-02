@@ -25,7 +25,7 @@ import {
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { parseAgentName, parseAgentVoice } from "@/lib/calls/liveAgent";
 import { AGENT_OUTCOMES, type AgentOutcomeKind, type CallCampaignStatus } from "@/lib/calls/contract";
-import { CallApiError, startCall } from "@/lib/calls/sessions";
+import { CallApiError, expireStaleCalls, startCall } from "@/lib/calls/sessions";
 import { composeAgentBrief } from "./brief";
 import { callCampaignContacts, callCampaignStations, callCampaignStepRuns, callCampaigns, callSessions, callingStations } from "@/lib/calls/schema";
 import {
@@ -768,6 +768,9 @@ export async function updateAiLead(campaignId: string, contactId: string, input:
 }
 
 export async function getAiLeadDetail(campaignId: string, contactId: string): Promise<AiLeadDetail> {
+  // A call that never reported back (e.g. a rep campaign's call whose WhatsApp
+  // tab was closed) would otherwise stay "queued" here and disable both call buttons.
+  await expireStaleCalls();
   const campaign = await loadCampaignRow(campaignId);
   const row = await loadContact(campaignId, contactId);
   const [lead, { activity, summary }] = await Promise.all([

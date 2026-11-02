@@ -449,6 +449,12 @@ agreed to a meeting but have not booked. Leads are `call_campaign_contacts`
 with `ai_*` columns; the rep-campaign code (`contactCallStatus.ts`,
 `leadStage.ts`) leaves their stage and follow-up date to the engine.
 
+Rep campaigns (`run_by = 'rep'`, worked by hand) are no longer listed or
+created (2 Nov 2026): the Call campaigns page shows AI campaigns only, and a
+rep talks to a lead with "Call now". Their data, API and pages remain for
+old links; the shared calling code (`mode = 'rep'` calls from the CRM's Call
+button) is unaffected.
+
 The engine (`engine.ts`, an in-process 20 s tick, production only,
 `PAUSE_AI_CALLING`) settles finished calls and messages, applies the pure
 decision in `engineRules.ts` (the agent's `record_outcome` decides: booking
