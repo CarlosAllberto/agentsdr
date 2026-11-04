@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { RiArrowDownSLine, RiBookOpenLine, RiLoader4Line } from "@remixicon/react";
 import * as Checkbox from "@/components/alignui/checkbox";
 import * as Popover from "@/components/alignui/popover";
-import { cn } from "@/utils/cn";
 
 type KnowledgeOption = { id: string; title: string; kind: string; alwaysInclude: boolean; chars: number };
 
@@ -19,9 +18,6 @@ const KIND_LABELS: Record<string, string> = {
   custom: "Custom",
 };
 
-/** What a call reads of the selected documents (liveAgent.ts budgetKnowledge): each cut to 5,000 characters, 12,000 in all. */
-const PER_DOCUMENT_CHARS = 5_000;
-const TOTAL_CHARS = 12_000;
 /** Chips shown in the closed dropdown before "+N". */
 const MAX_CHIPS = 4;
 
@@ -70,7 +66,7 @@ export function KnowledgePicker({ value, onChange, disabled }: {
   }, [value, options]);
 
   const chosen = (options ?? []).filter((option) => selected.has(option.id));
-  const used = chosen.reduce((sum, option) => sum + Math.min(option.chars, PER_DOCUMENT_CHARS), 0);
+  const used = chosen.reduce((sum, option) => sum + option.chars, 0);
   const allSelected = !!options?.length && chosen.length === options.length;
 
   const toggle = (id: string, on: boolean) => {
@@ -136,7 +132,6 @@ export function KnowledgePicker({ value, onChange, disabled }: {
                     <span className="block truncate text-label-sm text-text-strong-950">{option.title}</span>
                     <span className="block text-paragraph-xs text-text-sub-600">
                       {KIND_LABELS[option.kind] ?? option.kind} · {option.chars.toLocaleString()} characters
-                      {option.chars > PER_DOCUMENT_CHARS ? " (first 5,000 used)" : ""}
                       {option.alwaysInclude ? " · always include" : ""}
                     </span>
                   </span>
@@ -149,10 +144,8 @@ export function KnowledgePicker({ value, onChange, disabled }: {
       {error ? (
         <p className="text-paragraph-xs text-error-base">Could not load the Knowledge documents: {error}</p>
       ) : (
-        <p className={cn("text-paragraph-xs", used > TOTAL_CHARS ? "text-warning-dark" : "text-text-sub-600")}>
-          {used > TOTAL_CHARS
-            ? `That is about ${used.toLocaleString()} characters; a call reads the first ${TOTAL_CHARS.toLocaleString()} — company, product, pricing and FAQs first, case studies last.`
-            : "Company facts the agent can draw on. Manage documents in CRM → Knowledge."}
+        <p className="text-paragraph-xs text-text-sub-600">
+          Company facts the agent can draw on{used ? ` — ${used.toLocaleString()} characters, all read on every call` : ""}. Manage documents in CRM → Knowledge.
         </p>
       )}
     </div>

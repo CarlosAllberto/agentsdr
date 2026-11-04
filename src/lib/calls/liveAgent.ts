@@ -307,10 +307,7 @@ export function agentInstructions(
 
 export type KnowledgeDocument = { title: string; content: string };
 
-/** Each knowledge document is cut to this; the agent needs the gist, and a long prompt slows every turn a little. */
-const KNOWLEDGE_DOCUMENT_CHARS = 5_000;
-const KNOWLEDGE_TOTAL_CHARS = 12_000;
-/** Most useful first, so the budget cuts case studies before the product. */
+/** Most useful first: company and product before case studies. */
 const KNOWLEDGE_ORDER = ["company", "product", "pricing", "faq", "objection", "scheduling", "custom", "case_study"];
 
 /**
@@ -339,24 +336,24 @@ export async function agentKnowledge(ids: string[] | null = null): Promise<Knowl
       ),
     )
     .orderBy(asc(crmKnowledgeDocuments.title));
-  return budgetKnowledge(rows);
+  return orderKnowledge(rows);
 }
 
-export function budgetKnowledge(rows: { title: string; kind: string; content: string }[]): KnowledgeDocument[] {
+/**
+ * Every selected document, whole. A cap of 5,000 characters a document and
+ * 12,000 in all gave the agent 41% of one organization's knowledge (4 Nov
+ * 2026): their pricing section never reached a call, so it told two leads it
+ * could not discuss price. CRM drafts dropped their budget for the same reason.
+ */
+export function orderKnowledge(rows: { title: string; kind: string; content: string }[]): KnowledgeDocument[] {
   const rank = (kind: string) => {
     const index = KNOWLEDGE_ORDER.indexOf(kind);
     return index === -1 ? KNOWLEDGE_ORDER.length : index;
   };
-  let left = KNOWLEDGE_TOTAL_CHARS;
-  const chosen: KnowledgeDocument[] = [];
-  for (const row of [...rows].sort((a, b) => rank(a.kind) - rank(b.kind))) {
-    const content = row.content.trim();
-    if (!content || left <= 200) continue;
-    const take = Math.min(content.length, KNOWLEDGE_DOCUMENT_CHARS, left);
-    chosen.push({ title: row.title, content: take < content.length ? `${content.slice(0, take).trimEnd()} …` : content });
-    left -= take;
-  }
-  return chosen;
+  return [...rows]
+    .sort((a, b) => rank(a.kind) - rank(b.kind))
+    .map((row) => ({ title: row.title, content: row.content.trim() }))
+    .filter((document) => document.content);
 }
 
 /** Test option: the extension uploads the exact audio the model heard (see AgentTokenResponse). */

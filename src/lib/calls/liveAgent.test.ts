@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentInstructions, budgetKnowledge, liveSetup, parseAgentName, parseAgentOutcome, parseAgentVoice, parseWhenAt } from "./liveAgent";
+import { agentInstructions, liveSetup, orderKnowledge, parseAgentName, parseAgentOutcome, parseAgentVoice, parseWhenAt } from "./liveAgent";
 import { CallApiError } from "./sessions";
 import { MAX_AGENT_NAME_CHARS } from "./contract";
 
@@ -53,22 +53,20 @@ describe("parseAgentName", () => {
   });
 });
 
-describe("budgetKnowledge", () => {
+describe("orderKnowledge", () => {
   test("orders product before case_study", () => {
-    const docs = budgetKnowledge([
+    const docs = orderKnowledge([
       { title: "Win", kind: "case_study", content: "case" },
       { title: "Prod", kind: "product", content: "product" },
     ]);
     expect(docs.map((doc) => doc.title)).toEqual(["Prod", "Win"]);
   });
 
-  test("caps the total", () => {
-    const rows = Array.from({ length: 6 }, (_, index) => ({ title: `Doc ${index}`, kind: "product", content: "z".repeat(5_000) }));
-    const docs = budgetKnowledge(rows);
-    const total = docs.reduce((sum, doc) => sum + doc.content.length, 0);
-    // Cut documents gain a trailing " …".
-    expect(total).toBeLessThanOrEqual(12_000 + 2 * docs.length);
-    expect(docs.length).toBeLessThan(rows.length);
+  test("keeps every document whole", () => {
+    const rows = Array.from({ length: 6 }, (_, index) => ({ title: `Doc ${index}`, kind: "product", content: "z".repeat(12_000) }));
+    const docs = orderKnowledge(rows);
+    expect(docs).toHaveLength(6);
+    expect(docs.every((doc) => doc.content.length === 12_000)).toBe(true);
   });
 });
 
