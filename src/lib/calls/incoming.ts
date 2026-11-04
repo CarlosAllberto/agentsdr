@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { personCompanyName } from "@/lib/leads/companyName";
@@ -67,7 +67,16 @@ async function decide(station: StationRow, { workerId, call }: WorkerIncomingCal
   if (!personId) return no("not a lead");
   if (await isPersonDoNotContact(db, personId)) return no("the lead is Do Not Contact");
 
-  const contact = await aiContactFor(personId);
+  // Who they are calling back: our last AI call to them — its campaign and the
+  // agent's name and voice they heard. Without it the agent answered as the
+  // default persona, with none of that campaign's instructions (3–4 Nov 2026).
+  const lastCall = await lastAgentCallTo(personId);
+  const contact = await aiContactFor(personId, lastCall?.campaignContactId ?? null);
+  const persona = lastCall?.agentName
+    ? { name: lastCall.agentName, voice: lastCall.agentVoice }
+    : { name: contact?.campaign.aiAgentName ?? null, voice: contact?.campaign.aiAgentVoice ?? null };
+  // Only a launched campaign's engine settles a step run (a draft's lead still gets its instructions).
+  const countsAsStep = !!contact?.campaign.aiLaunchedAt;
   const [found] = await db
     .select({ person: people, companyName: companies.name })
     .from(people)
@@ -114,8 +123,8 @@ async function decide(station: StationRow, { workerId, call }: WorkerIncomingCal
         direction: "inbound",
         stationId: station.id,
         agentBrief: brief,
-        agentName: contact?.campaign.aiAgentName ?? null,
-        agentVoice: contact?.campaign.aiAgentVoice ?? null,
+        agentName: persona.name,
+        agentVoice: persona.voice,
         livePhase: ringing,
         claimedAt: now,
         claimedBy: workerId,
@@ -123,7 +132,7 @@ async function decide(station: StationRow, { workerId, call }: WorkerIncomingCal
       .returning();
     if (!row) throw new Error("The incoming call's row could not be written");
     await tx.update(callingStations).set({ workerId, lastCallAt: now, updatedAt: now }).where(eq(callingStations.id, station.id));
-    if (contact) {
+    if (contact && countsAsStep) {
       await tx.insert(callCampaignStepRuns).values({
         contactId: contact.contact.id,
         stepKey: inboundStepKey(row.id),
@@ -138,7 +147,7 @@ async function decide(station: StationRow, { workerId, call }: WorkerIncomingCal
 
   if (!created) {
     // On another call: they show up as a missed call, so call them back first.
-    if (contact && isOpen(contact.contact.aiStatus)) {
+    if (contact && countsAsStep && isOpen(contact.contact.aiStatus)) {
       await db
         .update(callCampaignContacts)
         .set({ aiNextAt: now, updatedAt: now })
@@ -167,24 +176,50 @@ function isOpen(status: string | null): boolean {
   return (AI_OPEN_STATUSES as readonly string[]).includes(status ?? "");
 }
 
+/** Our most recent AI-agent call to this person (not one a rep talked on): its campaign lead and persona. */
+async function lastAgentCallTo(personId: string) {
+  const [row] = await db
+    .select({ campaignContactId: callSessions.campaignContactId, agentName: callSessions.agentName, agentVoice: callSessions.agentVoice })
+    .from(callSessions)
+    .where(and(
+      inOrg(callSessions),
+      eq(callSessions.personId, personId),
+      eq(callSessions.direction, "outbound"),
+      eq(callSessions.mode, "agent_cloud"),
+      isNull(callSessions.remoteRep),
+    ))
+    .orderBy(desc(callSessions.createdAt))
+    .limit(1);
+  return row ?? null;
+}
+
 /**
  * The person's lead in an AI campaign, if any — the one whose agent answers:
- * an active campaign before a paused one, an open lead before a settled one,
- * then the most recently touched.
+ * the lead our last call to them came from (launched or not: it is what they
+ * heard about), else an active launched campaign before a paused one, an open
+ * lead before a settled one, then the most recently touched.
  */
-async function aiContactFor(personId: string) {
+async function aiContactFor(personId: string, lastCampaignContactId: string | null) {
+  const base = and(
+    inOrg(callCampaigns),
+    eq(callCampaignContacts.personId, personId),
+    eq(callCampaigns.runBy, "ai"),
+    sql`${callCampaigns.archivedAt} IS NULL`,
+  );
+  if (lastCampaignContactId) {
+    const [last] = await db
+      .select({ contact: callCampaignContacts, campaign: callCampaigns })
+      .from(callCampaignContacts)
+      .innerJoin(callCampaigns, eq(callCampaigns.id, callCampaignContacts.campaignId))
+      .where(and(base, eq(callCampaignContacts.id, lastCampaignContactId)))
+      .limit(1);
+    if (last) return last;
+  }
   const [row] = await db
     .select({ contact: callCampaignContacts, campaign: callCampaigns })
     .from(callCampaignContacts)
     .innerJoin(callCampaigns, eq(callCampaigns.id, callCampaignContacts.campaignId))
-    .where(and(
-      inOrg(callCampaigns),
-      eq(callCampaignContacts.personId, personId),
-      eq(callCampaigns.runBy, "ai"),
-      // A draft campaign is not working the lead yet; its step run would never be settled.
-      sql`${callCampaigns.aiLaunchedAt} IS NOT NULL`,
-      sql`${callCampaigns.archivedAt} IS NULL`,
-    ))
+    .where(and(base, sql`${callCampaigns.aiLaunchedAt} IS NOT NULL`))
     .orderBy(
       sql`(${callCampaigns.status} = 'active') DESC`,
       sql`(${callCampaignContacts.aiStatus} IN ${AI_OPEN_STATUSES}) DESC`,

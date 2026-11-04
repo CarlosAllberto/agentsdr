@@ -29,6 +29,20 @@ describe("formatHistory", () => {
     expect(text).toContain("they wrote:");
     expect(text).not.toContain("x".repeat(250));
   });
+  test("who called, the persona used, and the transcript summary when no outcome was recorded", () => {
+    const text = formatHistory(
+      [
+        { at, status: "recorded", outcome: null, direction: "outbound", agentName: "Nisha", summary: "They run Meta ads; asked for a call on Wednesday." },
+        { at, status: "recorded", outcome: null, direction: "inbound", agentName: null, summary: null },
+      ],
+      [],
+      "UTC",
+      true,
+    );
+    expect(text).toContain("we called them (you, as Nisha); they picked up — They run Meta ads; asked for a call on Wednesday.");
+    expect(text).toContain("they called us; answered");
+    expect(text).toContain("refer to what was said");
+  });
   test("unanswered calls allow one mention", () => {
     const text = formatHistory([{ at, status: "no_recording", outcome: null }], [], "UTC");
     expect(text).toContain("no answer");

@@ -2,7 +2,7 @@ import "server-only";
 
 import type { AiInstructionBlock } from "@/lib/crm/ai/instructions";
 import { loadCallingInstructions } from "@/lib/crm/aiSettings";
-import { and, desc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channelRules } from "@/lib/channels/rules.server";
 import { inOrg } from "@/lib/tenancy/scope";
@@ -33,6 +33,8 @@ export type AgentPromptContext = {
 const MAX_PREVIOUS_CALLS = 6;
 const MAX_PREVIOUS_MESSAGES = 6;
 const MESSAGE_CHARS = 200;
+/** A past call's transcript summary, cut to keep the history short. */
+const CALL_SUMMARY_CHARS = 400;
 
 /** "Tuesday, 27 October 2026, 14:35 (GMT+05:30) in Asia/Kolkata", so the agent can turn "Thursday at 4" into an exact instant. */
 export function formatNow(at: Date, timeZone: string): string {
@@ -62,7 +64,17 @@ function safeZone(timeZone: string): string {
   }
 }
 
-export type PreviousCall = { at: Date; status: string; outcome: AgentOutcome | null };
+export type PreviousCall = {
+  at: Date;
+  status: string;
+  outcome: AgentOutcome | null;
+  /** Who rang whom (absent: we called them). */
+  direction?: CallDirection;
+  /** The name the agent used on it; null: a rep, or the default persona. */
+  agentName?: string | null;
+  /** The transcript's summary, for a call where the agent recorded no outcome summary. */
+  summary?: string | null;
+};
 export type PreviousMessage = { at: Date; direction: "inbound" | "outbound"; body: string };
 
 /** The <history> section, newest call first; null when there is nothing to say. */
@@ -75,12 +87,16 @@ export function formatHistory(calls: PreviousCall[], messages: PreviousMessage[]
     lines.push("Earlier calls (newest first):");
     for (const call of calls.slice(0, MAX_PREVIOUS_CALLS)) {
       const pickedUp = call.status === "recorded";
-      let line = `- ${day(call.at)}: ${pickedUp ? "they picked up" : "no answer"}`;
+      const who = call.direction === "inbound" ? "they called us" : "we called them";
+      const as = call.agentName ? ` (you, as ${call.agentName})` : "";
+      let line = `- ${day(call.at)}: ${who}${as}; ${pickedUp ? (call.direction === "inbound" ? "answered" : "they picked up") : "no answer"}`;
       if (call.outcome) {
         line += `; outcome: ${AGENT_OUTCOME_LABELS[call.outcome.outcome]}`;
         if (call.outcome.summary) line += ` — ${call.outcome.summary}`;
         if (call.outcome.when) line += ` (${call.outcome.when})`;
       }
+      // What was said, when the agent left no summary of its own (e.g. it never recorded an outcome).
+      if (pickedUp && !call.outcome?.summary && call.summary) line += ` — ${call.summary.replace(/\s+/g, " ").trim().slice(0, CALL_SUMMARY_CHARS)}`;
       lines.push(line);
     }
   }
@@ -179,7 +195,14 @@ export async function loadAgentContext(row: SessionRow): Promise<AgentPromptCont
     loadCampaignGoal(row.campaignContactId),
     loadCallingInstructions(),
     db
-      .select({ at: callSessions.createdAt, status: callSessions.status, outcome: callSessions.agentOutcome })
+      .select({
+        at: callSessions.createdAt,
+        status: callSessions.status,
+        outcome: callSessions.agentOutcome,
+        direction: callSessions.direction,
+        agentName: callSessions.agentName,
+        summary: sql<string | null>`${callSessions.transcript}->>'summary'`,
+      })
       .from(callSessions)
       .where(
         and(

@@ -6,7 +6,7 @@ import { setPersonDoNotContactInTransaction } from "@/lib/crm/policies";
 import { withCrmTransaction } from "@/lib/crm/repository";
 import { parseAgentOutcome } from "@/lib/calls/liveAgent";
 import { CallApiError, callApiErrorResponse, withRecorderScope } from "@/lib/calls/sessions";
-import { callSessions } from "@/lib/calls/schema";
+import { callCampaignStepRuns, callSessions } from "@/lib/calls/schema";
 import { inOrg } from "@/lib/tenancy/scope";
 
 /**
@@ -23,9 +23,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         .update(callSessions)
         .set({ agentOutcome: outcome })
         .where(and(inOrg(callSessions), eq(callSessions.id, row.id)));
-      // A lead who called back outside any AI campaign: no engine settles this call
-      // (an AI campaign's settle sets Do Not Contact itself), and no rep was on it.
-      if (outcome.outcome === "do_not_contact" && row.direction === "inbound" && !row.campaignContactId && row.personId) {
+      // A call-back no AI campaign step settles (no campaign, or a draft one): nothing
+      // else records Do Not Contact for it (a launched campaign's settle does), and no rep was on it.
+      if (outcome.outcome === "do_not_contact" && row.direction === "inbound" && row.personId && !(await settledByCampaignStep(row.id))) {
         const personId = row.personId;
         await withCrmTransaction((tx) =>
           setPersonDoNotContactInTransaction(tx, {
@@ -42,4 +42,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   } catch (error) {
     return callApiErrorResponse(error);
   }
+}
+
+async function settledByCampaignStep(callId: string): Promise<boolean> {
+  const [run] = await db.select({ id: callCampaignStepRuns.id }).from(callCampaignStepRuns).where(eq(callCampaignStepRuns.callSessionId, callId)).limit(1);
+  return !!run;
 }

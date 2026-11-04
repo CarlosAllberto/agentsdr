@@ -556,10 +556,12 @@ this worker holds and that has no open call — at any hour (calling hours
 limit when we call, not when they do); anyone else rings out. Answering
 creates the `call_sessions` row already claimed, with `direction =
 'inbound'` (`scripts/add-call-session-direction.ts`), so the number is busy
-for the claim, the engine and messaging. A lead in an AI campaign gets that
-campaign's agent, knowledge and instructions (`composeAgentBrief` purpose
-`inbound`) and a step run `inbound:<call id>` that the engine settles like a
-placed call — but only a conversation moves the lead; a ring that never
+for the claim, the engine and messaging. The call-back takes the campaign
+and persona of our last AI call to that person (launched or draft — what
+they heard about; else a launched campaign they are in): that campaign's
+instructions, knowledge and goal (`composeAgentBrief` purpose `inbound`) and
+the agent name and voice they heard. Only a launched campaign also gets a
+step run `inbound:<call id>` that the engine settles like a placed call — but only a conversation moves the lead; a ring that never
 connected is not a sequence attempt (nor, for a rep campaign, an unanswered
 one). A lead who rang while the number was busy is called back first
 (`ai_next_at = now`). The prompt (`agentInstructions`, `formatHistory`, the
