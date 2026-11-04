@@ -38,7 +38,7 @@ import { syncCallFollowUpSafely } from "../crmFollowUp";
 import { callCampaignContacts, callCampaigns, callCampaignStations, callCampaignStepRuns, callSessions, callingStations, stationMessageJobs } from "../schema";
 import { CallApiError, expireStaleCalls, startCall } from "../sessions";
 import { composeAgentBrief } from "./brief";
-import { AI_OPEN_STATUSES, DEFAULT_BOOKING_MESSAGE, isInboundStepKey, type AiCallResult } from "./contract";
+import { AI_OPEN_STATUSES, DEFAULT_BOOKING_MESSAGE, isOffSequenceCallKey, type AiCallResult } from "./contract";
 import {
   afterCall,
   afterMessage,
@@ -340,9 +340,9 @@ async function settleCall(row: OpenRun, now: Date): Promise<boolean> {
   }
 
   const outcome = call.agentOutcome ?? null;
-  // They called us back (src/lib/calls/incoming.ts): only a conversation moves the lead —
-  // a ring that never connected is not one of the sequence's attempts.
-  const inbound = isInboundStepKey(run.stepKey);
+  // They called us back (src/lib/calls/incoming.ts), or someone pressed AI call on the lead:
+  // only a conversation moves the lead — a ring that never connected is not one of the sequence's attempts.
+  const inbound = isOffSequenceCallKey(run.stepKey);
   const settled = await finishRun(
     row,
     { status: result === "error" ? "failed" : "done", result, error: call.error },

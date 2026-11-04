@@ -309,6 +309,7 @@ export function describeStepKey(stepKey: string): { phase: "reach" | "chase" | "
   if (key.startsWith("callback:")) return { phase: "system", stepId: null, label: `Call back ${key.slice(9)}` };
   if (key === "booking-link") return { phase: "system", stepId: null, label: "Booking link" };
   if (key.startsWith("inbound:")) return { phase: "system", stepId: null, label: "They called back" };
+  if (key.startsWith("now:")) return { phase: "system", stepId: null, label: "AI call from the lead page" };
   return { phase: "system", stepId: null, label: key };
 }
 

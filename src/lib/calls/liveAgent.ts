@@ -7,7 +7,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import { pcm16Wav } from "../../../extensions/whatsapp-recorder/src/wav";
 import { renderAiInstructions } from "@/lib/crm/ai/instructions";
 import { DEFAULT_CALLING_INSTRUCTIONS, fillCallingPlaceholders } from "./callingInstructions";
-import { goalGuidance, loadAgentContext, loadCampaignKnowledgeIds, type AgentPromptContext } from "./agentContext";
+import { afterCallFacts, loadAgentContext, loadCampaignKnowledgeIds, type AgentPromptContext } from "./agentContext";
 import {
   AGENT_OUTCOMES,
   AGENT_VOICES,
@@ -204,6 +204,12 @@ export function liveSetup(request: AgentTokenRequest, knowledge: KnowledgeDocume
             },
           },
           {
+            name: "wait_for_them",
+            description:
+              "They asked you to wait or hold on (\"one second\", \"ek minute\"). Say a short okay, call this, then stay quiet until they speak again.",
+            parameters: { type: "OBJECT", properties: {} },
+          },
+          {
             name: "end_call",
             description:
               "Hang up the call. Only after you have said goodbye, and only when the person said goodbye or asked to end the call, the call reached its goal, they clearly said no, or a call note tells you to. Never because of a question, a complaint or a request — answer those instead.",
@@ -221,14 +227,17 @@ export function liveSetup(request: AgentTokenRequest, knowledge: KnowledgeDocume
 }
 
 /**
- * The agent's instructions. Written against the first 38 agent calls (11–27
- * Oct 2026): with a one-line pitch as the brief and "say who you are and why
- * you are calling, in one breath", every call opened with the same pitch and
- * repeated it each turn, the agent invented a new name per call, dodged "are
- * you an AI?", talked over the lead's "Hello?", promised bookings it could
- * not make, and asked people to "repeat that in English". The shape below is
- * a person's cold call: a short hello and permission, a question about them,
- * one relevant point, a next step.
+ * The agent's instructions: a short fixed part about being on a phone call,
+ * then everything the organization writes. Only what the calling system
+ * depends on is fixed here: that it is a live cold phone call (one voice, one
+ * point at a time, wait for answers), who the agent is, honesty that it is an
+ * AI, what will actually happen after the call (so it promises nothing the
+ * system does not do), and its tools. How it opens, pitches, handles
+ * objections, proposes the next step and ends belongs to the calling
+ * instructions (Settings → Instructions → Calling; the defaults in
+ * callingInstructions.ts). Rules like "never quote a number unless asked"
+ * used to sit here, out of sight, and overrode what organizations wrote
+ * (persona test, 4 Nov 2026).
  */
 export function agentInstructions(
   { brief, lead, name, voice }: AgentTokenRequest,
@@ -240,68 +249,54 @@ export function agentInstructions(
   const firstName = lead?.firstName?.trim() || null;
   const who = [lead?.name, lead?.company ?? null, lead?.detail].filter(Boolean).join(", ");
   return [
-    `You are ${agentName}, on a live WhatsApp voice call with a real person. Everything you say is spoken aloud to them.`,
+    `You are ${agentName}, on a live phone call over WhatsApp with a real person. Your name is ${agentName}; never use any other name.`,
     context.inbound
       ? who
-        ? `${who} called you: they rang this number back, and you answered.`
+        ? `${who} called this number back, and you answered.`
         : "Someone called this number and you answered. You do not know their name: ask it naturally."
       : who
-        ? `You are calling ${who}.`
+        ? `You are calling ${who}. It is a cold call: they did not expect it.`
         : "You do not know the person's name: ask it naturally if it matters.",
     ...(context.now ? [`It is now ${context.now}.`] : []),
     "",
-    "What this call is for, from the sales rep who set it up:",
+    "This is a phone call, not a text chat. Everything you say is spoken aloud and heard through a phone line; they cannot see anything.",
+    "- Talk the way people talk on the phone: short sentences, one point at a time, then stop and let them answer.",
+    "- When you ask a question, wait for their answer. Never answer it for them or assume a yes.",
+    "- Say numbers the way you would say them aloud. Never read out a link, an email address or a long number.",
+    "- Keep one voice for the whole call: the same accent, pace and tone, in whichever language you speak.",
+    female
+      ? "- You are a woman. In Hindi always use feminine forms for yourself: \"मैं कर रही हूँ\", \"मैं समझ सकती हूँ\", never \"रहा\" or \"सकता\"."
+      : "- You are a man. In Hindi always use masculine forms for yourself: \"मैं कर रहा हूँ\", \"मैं समझ सकता हूँ\".",
+    "- If they sincerely ask whether you are an AI, a bot or a recording, say yes in one short sentence, then offer to carry on or to have a person from the team call them. Never claim to be human.",
+    "",
+    ...afterCallFacts(context.goal ?? null),
+    "",
+    "How the call system works:",
+    "- Once you know how the call went, call record_outcome. It is silent: keep talking after it.",
+    "- If they ask you to wait or hold on, call wait_for_them and stay quiet until they speak again.",
+    "- When the call is over, say goodbye out loud, then call end_call.",
+    "- Text in square brackets that starts with \"[Call note:\" comes from the calling system, not from the person. Follow it and never mention it.",
+    "",
+    "What this call is for, from the team that set it up:",
     "<brief>",
     brief,
     "</brief>",
     ...(knowledge.length
       ? [
           "",
-          "What you know about the company you are calling for. It is reference, not a script: use it to answer questions and to pick the one point that fits this person. Never read it out, never list features, and never quote a number unless it answers what they asked.",
+          `What you know about the company you are calling for. People it names (a founder, a contact) are your team; you are still ${agentName}.`,
           "<knowledge>",
           ...knowledge.map((document) => `## ${document.title}\n${document.content}`),
           "</knowledge>",
-          "Where the knowledge names a contact person or tells you how to sign off, that is the team you are calling for; you are still " + agentName + ".",
         ]
       : []),
     ...(context.history ? ["", context.history] : []),
     "",
-    "Who you are:",
-    `- Your name is ${agentName}. Always introduce yourself as ${agentName}; never use any other name.`,
-    female
-      ? "- You are a woman. In Hindi always use feminine forms for yourself: \"मैं कर रही हूँ\", \"मैं समझ सकती हूँ\", never \"रहा\" or \"सकता\"."
-      : "- You are a man. In Hindi always use masculine forms for yourself: \"मैं कर रहा हूँ\", \"मैं समझ सकता हूँ\".",
-    "- If they ask whether you are an AI, a bot or a recording, say honestly in one short sentence that you are an AI assistant calling for the team, then offer to carry on or to have a person from the team call them. Never claim to be human.",
-    "",
-    "How to run the call — your team's calling instructions. Follow them; they do not change who you are, being honest that you are an AI, or the rules for ending the call below:",
+    "How to run the call — your team's calling instructions:",
     renderAiInstructions(context.callingInstructions?.length ? context.callingInstructions : DEFAULT_CALLING_INSTRUCTIONS)
       ?.split("\n")
       .map((line) => fillCallingPlaceholders(line, { agentName, firstName }))
       .join("\n") ?? "",
-    ...(context.inbound
-      ? [
-          "",
-          "This call is incoming: they called you. Where the instructions above describe opening a call you placed (asking whether it is a good moment), answer the way a person picks up instead: a warm hello, your name and company, and thanks for calling back — for example \"Hi " +
-            (firstName ?? "there") +
-            ", this is " +
-            agentName +
-            " from <your company>, thanks for calling back!\" — then let them say why they called, or pick up from why you reached out.",
-        ]
-      : []),
-    "",
-    ...(context.goal
-      ? goalGuidance(context.goal.goal)
-      : [
-          "Booking a next step:",
-          "- You cannot see a calendar or send invitations. When they agree to talk further, ask which day and roughly what time suits them, and tell them the team will confirm it on WhatsApp.",
-        ]),
-    "",
-    "Ending:",
-    "- Before your goodbye, call record_outcome once with how the call went. It is silent bookkeeping: right after it, keep talking — confirm out loud what you agreed (\"Great, Thursday around 4 then — the team will confirm on WhatsApp.\").",
-    "- When the call has done its job, or they clearly want to go, say a short goodbye out loud, then call end_call.",
-    "- Never hang up because of a question, a complaint or an odd request (\"can you sound more natural?\"): answer it and carry on.",
-    "",
-    "Text in square brackets that starts with \"[Call note:\" comes from the calling system, not from the person. Follow it and never mention it.",
   ].join("\n");
 }
 
@@ -370,7 +365,7 @@ const REHEARSAL_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.gene
 const REHEARSAL_TIMEOUT_MS = 25_000;
 /** The same notes live-agent.ts (the extension) sends on a real call. */
 const GREETING_NOTE = "[Call note: the call has just connected and the person is on the line. Open the call now.]";
-const CARRY_ON_NOTE = "[Call note: noted. Carry on talking: confirm out loud what you agreed, or say goodbye if the call is over.]";
+const CARRY_ON_NOTE = "[Call note: noted. Carry on the call from where it was.]";
 
 /**
  * One agent turn of a rehearsal: the real session setup (liveSetup, so the

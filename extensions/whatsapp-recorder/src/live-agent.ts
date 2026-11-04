@@ -44,10 +44,13 @@ const SILENCE_CHECK_NOTE =
   "[Call note: the person has not said anything for a few seconds. Check briefly and naturally whether they are still there, in the language of the call.]";
 /**
  * After a tool call this model says nothing until the person speaks again
- * (27 Oct 2026, every simulated call): a goodbye or a "Thursday at 4 then"
- * never came. A turn that ends in a tool call with no voice gets one of these.
+ * (27 Oct 2026, every simulated call): a goodbye never came. A turn with a
+ * tool call and no voice at all gets one of these. It used to say "confirm
+ * what you agreed", and went out after a turn that ended in a question: the
+ * agent then answered its own "would Thursday at 3 work?" with "Great,
+ * Thursday at 3 then" (4 Nov 2026).
  */
-const CARRY_ON_NOTE = "[Call note: noted. Carry on talking: confirm out loud what you agreed, or say goodbye if the call is over.]";
+const CARRY_ON_NOTE = "[Call note: noted. Carry on the call from where it was.]";
 const SAY_GOODBYE_NOTE = "[Call note: say your goodbye out loud now.]";
 const SILENCE_GOODBYE_NOTE =
   "[Call note: still no answer. Call record_outcome, say a short, friendly goodbye (you will try them another time), then call end_call.]";
@@ -72,6 +75,12 @@ const HELLO_MAX_WAIT_MS = 2_000;
 const SILENCE_CHECK_MS = 4_000;
 const SILENCE_GOODBYE_MS = 8_000;
 const SILENCE_HANGUP_MS = 12_000;
+/**
+ * They asked the agent to hold on (it called wait_for_them): no check-ins for
+ * this long, unless they speak first. The 4 s check-in and goodbye hung up on
+ * a lead who had said "can you wait a second?" (4 Nov 2026).
+ */
+const WAIT_FOR_THEM_MS = 90_000;
 /**
  * The model often calls end_call first and speaks its goodbye after the tool
  * response (seen 27 Oct 2026), so the hang-up waits for that turn to finish
@@ -117,8 +126,11 @@ export class LiveAgent {
   private lastNoteAt = 0;
   private ending = false;
   /** end_call was called: hang up once the goodbye after it is spoken. */
-  /** Tools the model called since its voice last came through. */
-  private toolsSinceVoice: string[] = [];
+  /** Tools the model called this turn, and whether the turn had any voice. */
+  private toolsThisTurn: string[] = [];
+  private voicedThisTurn = false;
+  /** wait_for_them: silence is expected until then, or until they speak. */
+  private waitingUntil = 0;
   private hangupPending: { reason: string; voiced: boolean; timers: ReturnType<typeof setTimeout>[] } | null = null;
   /** The test option's copy of exactly what is sent to the model (null when off). */
   private heard: Int16Array[] | null = null;
@@ -292,6 +304,7 @@ export class LiveAgent {
     this.silenceWatch = setInterval(() => {
       if (this.closed || this.holding || this.replying || this.ending || !this.ready) return;
       const now = Date.now();
+      if (now < this.waitingUntil) return;
       const quiet = now - Math.max(this.playUntil, this.lastVoiceAt, this.lastNoteAt, this.pickedUpAt);
       if (this.silenceNotes === 0 && quiet >= SILENCE_CHECK_MS) this.note(SILENCE_CHECK_NOTE, `silent ${Math.round(quiet / 1000)} s — checking they are there`);
       else if (this.silenceNotes === 1 && quiet >= SILENCE_GOODBYE_MS) this.note(SILENCE_GOODBYE_NOTE, `still silent ${Math.round(quiet / 1000)} s — saying goodbye`);
@@ -342,6 +355,7 @@ export class LiveAgent {
         this.leadSpoke = true;
         // They said something: the silence check-ins start over.
         if (!this.holding) this.silenceNotes = 0;
+        this.waitingUntil = 0;
         this.heardThisTurn += content.inputTranscription.text;
         // Logged as it arrives: a turn the model never answers is never flushed.
         this.handlers.trace(`AI agent: heard "${content.inputTranscription.text.trim()}"`);
@@ -362,7 +376,7 @@ export class LiveAgent {
           this.handlers.trace(`AI agent: replied ${Date.now() - this.lastVoiceAt} ms after the lead's last sound`);
         }
         this.replying = true;
-        this.toolsSinceVoice = [];
+        this.voicedThisTurn = true;
         if (this.hangupPending) this.hangupPending.voiced = true;
         if (this.holding) this.held.push([fromBase64(audio.data), rate]);
         else this.play(fromBase64(audio.data), rate);
@@ -370,18 +384,30 @@ export class LiveAgent {
       if (content.turnComplete) {
         this.replying = false;
         this.flushTranscript("turn");
+        const tools = this.toolsThisTurn;
+        const voiced = this.voicedThisTurn;
+        this.toolsThisTurn = [];
+        this.voicedThisTurn = false;
         if (this.hangupPending?.voiced) this.hangUp();
-        else if (this.toolsSinceVoice.length) {
-          const goodbye = this.toolsSinceVoice.includes("end_call");
-          this.toolsSinceVoice = [];
-          this.handlers.trace(`AI agent: silent after a tool call — asking it to ${goodbye ? "say goodbye" : "carry on"}`);
-          this.socket?.send(JSON.stringify({ realtimeInput: { text: goodbye ? SAY_GOODBYE_NOTE : CARRY_ON_NOTE } }));
+        else if (tools.includes("end_call")) {
+          // Its goodbye came before end_call in this same turn: done. Asking again
+          // made it say goodbye twice (4 Nov 2026).
+          if (voiced) this.hangUp();
+          else {
+            this.handlers.trace("AI agent: silent after a tool call — asking it to say goodbye");
+            this.socket?.send(JSON.stringify({ realtimeInput: { text: SAY_GOODBYE_NOTE } }));
+          }
+        } else if (!voiced && tools.some((tool) => tool !== "wait_for_them")) {
+          // Spoke nothing at all this turn: it went quiet after the tool. A turn that
+          // spoke (often ending in a question) waits for the person instead.
+          this.handlers.trace("AI agent: silent after a tool call — asking it to carry on");
+          this.socket?.send(JSON.stringify({ realtimeInput: { text: CARRY_ON_NOTE } }));
         }
       }
     }
 
     for (const call of message.toolCall?.functionCalls ?? []) {
-      this.toolsSinceVoice.push(call.name);
+      this.toolsThisTurn.push(call.name);
       const text = (key: string) => (typeof call.args?.[key] === "string" && (call.args[key] as string).trim() ? (call.args[key] as string).trim() : null);
       if (call.name === "record_outcome") {
         const outcome = text("outcome") as AgentOutcomeKind | null;
@@ -389,6 +415,10 @@ export class LiveAgent {
         if (!outcome) continue;
         this.handlers.trace(`AI agent: outcome ${outcome}${text("when") ? ` (${text("when")})` : ""} — ${text("summary") ?? ""}`);
         this.handlers.outcome({ outcome, summary: text("summary"), when: text("when"), whenAt: text("whenAt") });
+      } else if (call.name === "wait_for_them") {
+        this.respond(call);
+        this.waitingUntil = Date.now() + WAIT_FOR_THEM_MS;
+        this.handlers.trace(`AI agent: asked to hold on — waiting up to ${WAIT_FOR_THEM_MS / 1000} s for them`);
       } else if (call.name === "end_call") {
         const reason = text("reason") ?? "the agent ended the call";
         this.respond(call);

@@ -113,13 +113,15 @@ describe("agentInstructions context", () => {
   test("states the current date and time", () => {
     expect(agentInstructions(base, [], { now: "Tuesday, 27 October 2026, 14:35 (GMT+05:30) in Asia/Kolkata" })).toContain("It is now Tuesday, 27 October 2026");
   });
-  test("a campaign goal replaces the generic booking section", () => {
-    const meeting = agentInstructions(base, [], { goal: { goal: "book_meeting", bookingUrl: null } });
-    expect(meeting).not.toContain("Booking a next step");
-    expect(meeting).toContain("meeting_booked");
-    expect(agentInstructions(base, [], { goal: { goal: "human_callback", bookingUrl: null } })).toContain("human_callback with whenAt");
-    expect(agentInstructions(base, [], { goal: { goal: "either", bookingUrl: null } })).toContain("their choice");
-    expect(agentInstructions(base, [], {})).toContain("Booking a next step");
+  test("what happens after the call follows the campaign goal", () => {
+    expect(agentInstructions(base, [], { goal: { goal: "book_meeting", bookingUrl: "https://cal.com/x" } })).toContain("a link to pick a time");
+    expect(agentInstructions(base, [], { goal: { goal: "human_callback", bookingUrl: null } })).toContain("Record human_callback with whenAt");
+    expect(agentInstructions(base, [], {})).toContain("the team contacts them at the day and time you agree");
+  });
+  test("no hidden rule about numbers, and the phone-call framing comes first", () => {
+    const text = agentInstructions(base, [{ title: "T", content: "C" }], {});
+    expect(text).not.toContain("never quote a number");
+    expect(text.indexOf("This is a phone call, not a text chat")).toBeLessThan(text.indexOf("<brief>"));
   });
   test("history is included", () => {
     expect(agentInstructions(base, [], { history: "<history>x</history>" })).toContain("<history>x</history>");
@@ -146,7 +148,7 @@ describe("calling instructions (Settings → Instructions → Calling)", () => {
     expect(text).toContain("## Our way\nOpen with: Namaste Asha, Meera here.");
     expect(text).not.toContain("## How the call goes");
     expect(text).toContain("Never claim to be human.");
-    expect(text).toContain("call record_outcome once");
+    expect(text).toContain("call record_outcome");
     expect(text).toContain("[Call note:");
   });
   test("an unknown first name reads as \"there\"", () => {

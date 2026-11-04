@@ -90,6 +90,18 @@ export function inboundStepKey(callId: string): string {
 export function isInboundStepKey(stepKey: string): boolean {
   return stepKey.startsWith("inbound:");
 }
+/**
+ * The step run an AI call placed from the lead drawer gets ("AI call", not
+ * Call now): without one its outcome reached nothing — a call-back the lead
+ * asked for was never made and a booking link never sent (4 Nov 2026).
+ */
+export function drawerCallStepKey(callId: string): string {
+  return `now:${callId}`;
+}
+/** A call outside the sequence (they rang back, or someone pressed AI call): only a conversation moves the lead. */
+export function isOffSequenceCallKey(stepKey: string): boolean {
+  return stepKey.startsWith("inbound:") || stepKey.startsWith("now:");
+}
 
 export const AI_OPEN_STATUSES = ["queued", "reaching", "callback", "chasing"] as const satisfies readonly AiContactStatus[];
 export const AI_CONTACT_STATUS_LABELS: Record<AiContactStatus, string> = {

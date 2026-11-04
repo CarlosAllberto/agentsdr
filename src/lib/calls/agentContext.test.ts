@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatHistory, formatNow, goalGuidance } from "./agentContext";
+import { afterCallFacts, formatHistory, formatNow } from "./agentContext";
 
 describe("formatNow", () => {
   test("weekday, date, time, offset and zone", () => {
@@ -50,10 +50,18 @@ describe("formatHistory", () => {
   });
 });
 
-describe("goalGuidance", () => {
-  test("every goal keeps the never-confirmed rule", () => {
+describe("afterCallFacts", () => {
+  test("every goal says nothing else is sent and never confirms a meeting", () => {
     for (const goal of ["book_meeting", "human_callback", "either"] as const) {
-      expect(goalGuidance(goal).join("\n")).toContain("Never say a meeting is confirmed");
+      const text = afterCallFacts({ goal, bookingUrl: null }).join("\n");
+      expect(text).toContain("never say a meeting is confirmed");
+      expect(text).toContain("Never offer to send anything else");
     }
+    expect(afterCallFacts(null).join("\n")).toContain("Nothing else is sent");
+  });
+  test("the booking link is offered only when the campaign has one", () => {
+    expect(afterCallFacts({ goal: "book_meeting", bookingUrl: "https://cal.com/x" }).join("\n")).toContain("a link to pick a time");
+    expect(afterCallFacts({ goal: "book_meeting", bookingUrl: null }).join("\n")).toContain("has no booking link");
+    expect(afterCallFacts({ goal: "human_callback", bookingUrl: "https://cal.com/x" }).join("\n")).not.toContain("link to pick a time");
   });
 });

@@ -5,10 +5,11 @@
  * beside the reply drafting and classification instructions). Null there means
  * these defaults, so an organization that never opens the tab gets them.
  *
- * What is NOT here stays fixed in liveAgent.ts, because the calling system
- * depends on it: who the agent is (its name, the Hindi grammar of its voice),
- * being honest that it is an AI, the campaign's goal, recording the outcome
- * and hanging up, and following "[Call note:" messages.
+ * What is NOT here stays fixed in liveAgent.ts, and is kept short: that it is
+ * a live phone call (one voice, short turns, wait for answers), who the agent
+ * is, honesty that it is an AI, what the system will do after the call, and
+ * its tools. Everything about how it talks and reacts belongs here, and an
+ * organization's own blocks replace these completely.
  *
  * Placeholders: {{agentName}} and {{firstName}} ("there" when unknown).
  * Client-safe and import-free, so the settings page shows the same defaults.
@@ -48,6 +49,23 @@ export const DEFAULT_CALLING_INSTRUCTIONS: AiInstructionBlock[] = [
     content: [
       "- Speak the language they speak — English, Hindi or Hinglish — and switch when they do. Only ever speak English or Hindi.",
       "- The line is a phone line in India and can be unclear. If you did not catch something, or it sounded like another language, that is the line: say so like a person would (\"Sorry, the line broke up — could you say that again?\"). Never ask them to speak a particular language.",
+    ].join("\n"),
+  },
+  {
+    id: "next-step-and-ending",
+    title: "Next step and ending",
+    content: [
+      "- When they agree to a next step, say out loud what was agreed (\"Great, Thursday around four then\") and how it will reach them.",
+      "- When the call has done its job, or they clearly want to go, keep the goodbye short and warm.",
+      "- Never hang up because of a question, a complaint or an odd request (\"can you sound more natural?\"): answer it and carry on.",
+    ].join("\n"),
+  },
+  {
+    id: "call-backs",
+    title: "When they call you back",
+    content: [
+      "- Answer the way a person picks up: a warm hello, your name and company, and thanks for calling back — for example \"Hi {{firstName}}, this is {{agentName}} from <your company>, thanks for calling back!\". Do not ask whether it is a good moment: they called you.",
+      "- Let them say why they called, or pick up from why you reached out.",
     ].join("\n"),
   },
 ];

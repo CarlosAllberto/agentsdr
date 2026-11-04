@@ -471,17 +471,25 @@ open AI leads to `replied`. Cal.com (platform integration `calcom`; webhook
 `/api/webhooks/calcom?org=`, public) marks a lead `booked` through the
 `metadata[agentsdrContact]` the booking link carries.
 
-Instructions come in layers: the fixed rules in `liveAgent.ts` (who the
-agent is, honesty that it is an AI, the goal, outcome and hang-up, call
-notes), the organization's **calling instructions** (Settings → Instructions
+Instructions come in layers: a short fixed part in `liveAgent.ts` (it is a
+live cold phone call — one voice, short turns, wait for answers; who the
+agent is; honesty that it is an AI; what the system will actually do after
+the call, `afterCallFacts`, so it offers nothing else; its tools
+record_outcome / wait_for_them / end_call; call notes), then the
+organization's **calling instructions** (Settings → Instructions
 → Calling, `crm_settings.calling_instructions`; null = the defaults in
 `src/lib/calls/callingInstructions.ts`),
 the CRM Knowledge documents the campaign picks (`ai_knowledge_ids`; null =
-the organization's "always include" ones, as for a call placed by hand), the campaign's
+the organization's "always include" ones, as for a call placed by hand; read
+whole — a 12,000-character cap hid 59% of one organization's knowledge, and
+measured latency does not change with prompt size), the campaign's
 instructions and each call step's (`brief.ts`), and per call the lead's
 history, the current time and the goal (`agentContext.ts`). Rehearse a
 campaign's call by typing at `/api/calling/agent/rehearse`
-(`AgentRehearsal`).
+(`AgentRehearsal`). Everything about how the agent talks and reacts belongs
+in the calling instructions, not in code. "AI call" from a lead's drawer gets
+a step run `now:<call id>`, settled like a call-back's (only a conversation
+moves the lead).
 
 ### WhatsApp messaging through a station (no Unipile)
 

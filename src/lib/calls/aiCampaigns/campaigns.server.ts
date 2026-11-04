@@ -34,6 +34,7 @@ import {
   DEFAULT_BOOKING_MESSAGE,
   DEFAULT_CHASE_STEPS,
   DEFAULT_REACH_STEPS,
+  drawerCallStepKey,
   type AiCampaignStep,
   type AiContactStatus,
 } from "./contract";
@@ -1115,5 +1116,10 @@ export async function callAiLeadNow(campaignId: string, contactId: string, reque
     agentName: campaign.aiAgentName,
     agentVoice: campaign.aiAgentVoice,
   });
+  // The engine settles it like a placed step: a call-back, the booking link, the lead's status.
+  await db
+    .insert(callCampaignStepRuns)
+    .values({ contactId: contact.id, stepKey: drawerCallStepKey(started.call.id), kind: "call", status: "started", stationId: station.id, callSessionId: started.call.id })
+    .onConflictDoNothing();
   return { callId: started.call.id, numberName: station.name };
 }

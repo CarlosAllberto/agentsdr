@@ -125,31 +125,37 @@ export function formatHistory(calls: PreviousCall[], messages: PreviousMessage[]
   ].join("\n");
 }
 
-/** The campaign goal's "next step" section; the manual-call version stays in liveAgent.ts. */
-export function goalGuidance(goal: AiCampaignGoal): string[] {
+/**
+ * What the calling system will actually do after this call, by how it ends:
+ * the only things the agent may offer. Facts, not style — how it proposes them
+ * is the calling instructions'. It promised WhatsApp "details" nothing could
+ * send, and a booking link a campaign without one never sent (4 Nov 2026).
+ */
+export function afterCallFacts(goal: AgentPromptContext["goal"]): string[] {
   const always = [
-    "- If they ask you to call later, ask when suits them, then record call_back with whenAt.",
-    "- You cannot see a calendar. Never say a meeting is confirmed or booked in a calendar.",
+    "- A bad moment: the system calls them back at the time they give. Record call_back with whenAt; if they give no time, ask for a rough one.",
+    "- They ask never to be contacted again: nobody contacts them again. Record do_not_contact.",
+    "- You cannot see a calendar. A day or time they name is their preference: never say a meeting is confirmed or booked.",
+    "- Nothing else is sent: no documents, decks, overviews or other messages. Never offer to send anything else.",
   ];
-  if (goal === "book_meeting") {
+  if (!goal) {
     return [
-      "Next step (this campaign's goal is a short meeting with the team):",
-      "- If they are interested, propose a short meeting with the team and say you will send a WhatsApp message right after the call with a link to pick a time. Never read the link out.",
-      "- If they name a day or time, say that is fine to pick in the link. Record meeting_booked, with whenAt if they named a time.",
+      "What happens after this call (the only things you can offer):",
+      "- They want to talk further: the team contacts them at the day and time you agree. Record meeting_booked or human_callback with whenAt.",
       ...always,
     ];
   }
-  if (goal === "human_callback") {
-    return [
-      "Next step (this campaign's goal is a call from someone on the team):",
-      "- If they are interested, offer that someone from the team calls them. Agree a day and roughly what time, then record human_callback with whenAt.",
-      ...always,
-    ];
-  }
+  const link = goal.bookingUrl?.trim()
+    ? "the system sends them a WhatsApp message right after the call with a link to pick a time. Record meeting_booked (with whenAt if they named a time)."
+    : "the team contacts them to set it up (this campaign has no booking link to send). Record meeting_booked (with whenAt if they named a time).";
+  const team = "a person from the team calls them at the day and time you agree. Record human_callback with whenAt.";
   return [
-    "Next step (this campaign's goal is a meeting or a call with the team, their choice):",
-    "- If they are interested, offer to send a WhatsApp link right after the call to pick a time. Never read the link out. If they prefer, offer a call from the team instead.",
-    "- Link chosen: record meeting_booked (whenAt if they named a time). Team call chosen: agree a day and time and record human_callback with whenAt.",
+    "What happens after this call (the only things you can offer):",
+    ...(goal.goal === "book_meeting"
+      ? [`- They agree to a meeting with the team: ${link}`]
+      : goal.goal === "human_callback"
+        ? [`- They want to talk further: ${team}`]
+        : [`- They agree to a meeting: ${link}`, `- They would rather have a call from the team: ${team}`]),
     ...always,
   ];
 }
