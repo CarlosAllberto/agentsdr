@@ -6,7 +6,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import { companies, people } from "@/lib/leads/schema";
 import { personCompanyName } from "@/lib/leads/companyName";
 import { loadAgentContext, loadRehearsalContext, type AgentPromptContext } from "./agentContext";
-import { composeAgentBrief } from "./aiCampaigns/brief";
+import { agentBrief } from "./aiCampaigns/brief.server";
 import { MAX_AGENT_BRIEF_CHARS, type AgentTokenRequest, type RecorderLead } from "./contract";
 import { agentKnowledge, parseAgentName, parseAgentVoice, type KnowledgeDocument } from "./liveAgent";
 import { callCampaignContacts, callCampaigns } from "./schema";
@@ -64,7 +64,7 @@ export async function resolveRehearsal(body: Record<string, unknown>): Promise<R
 
     const callSteps = [...campaign.aiSteps, ...campaign.aiChaseSteps].filter((step) => step.kind === "call");
     const step = callSteps.find((candidate) => candidate.id === body.stepId) ?? callSteps[0];
-    brief = composeAgentBrief({
+    brief = await agentBrief({
       campaignInstructions: campaign.aiInstructions,
       purpose: "reach",
       stepInstructions: step?.kind === "call" ? step.instructions : null,

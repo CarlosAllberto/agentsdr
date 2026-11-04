@@ -37,7 +37,7 @@ import { DEFAULT_AGENT_NAME } from "../contract";
 import { syncCallFollowUpSafely } from "../crmFollowUp";
 import { callCampaignContacts, callCampaigns, callCampaignStations, callCampaignStepRuns, callSessions, callingStations, stationMessageJobs } from "../schema";
 import { CallApiError, expireStaleCalls, startCall } from "../sessions";
-import { composeAgentBrief } from "./brief";
+import { agentBrief } from "./brief.server";
 import { AI_OPEN_STATUSES, DEFAULT_BOOKING_MESSAGE, isOffSequenceCallKey, type AiCallResult } from "./contract";
 import {
   afterCall,
@@ -658,7 +658,7 @@ async function actForContact(
     body = step ? renderMessage(step.body, lead, campaign, link) : "";
     if (!body) return fail("The message is empty for this lead");
   } else {
-    brief = composeAgentBrief({
+    brief = await agentBrief({
       campaignInstructions: campaign.aiInstructions,
       purpose: plan.purpose,
       stepInstructions: plan.step?.kind === "call" ? plan.step.instructions : null,

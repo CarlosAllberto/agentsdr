@@ -151,6 +151,35 @@ cron secrets and tuning knobs. Two deliberate exceptions:
 `scripts/migrate-env-to-integrations.ts` copied an existing env setup into
 the store once (verifying each); keep it as the record of that move.
 
+## Prompts live in Langfuse, and every AI call is traced
+
+Every prompt AgentSDR writes itself is a Langfuse prompt (self-hosted
+`fuse.kandid.ai`, project "AgentSDR"; server v3, so the `@langfuse/*` SDK is
+pinned to v5 — v6 needs a v4 server). `src/lib/prompts/registry.ts` lists
+them by name (`<area>/<what>`, e.g. `calls/agent-system`, `crm/draft-system`)
+with the copy in code, which is what `scripts/seed-langfuse-prompts.ts`
+uploads (`--update` pushes a changed copy as a new production version) and
+what a call uses when Langfuse is unreachable or unconfigured (tests always).
+Templates use `{{variable}}` plus `{{#flag}}…{{/flag}}` / `{{^flag}}…{{/flag}}`
+sections (`src/lib/prompts/template.ts`), so wording stays in Langfuse and
+code only computes values. What organizations write (CRM and calling
+instructions, knowledge, campaign instructions) stays in the database and
+reaches a prompt as a variable. Never write prompt text inline in a feature:
+add it to the registry and read it with `getPrompt` / `getPromptTemplate`
+(`src/lib/observability/langfuse.ts`, 60 s cache).
+
+Every model call is wrapped in `traceGeneration` (input, prompt versions,
+model, output, tokens, errors; tagged with the organization as
+`userId: org:<id>`). OpenRouter's structured calls trace at
+`completeStructuredWithOpenRouter`. A phone call is a Langfuse session keyed
+by the call id: `call-agent-setup` (the full system prompt, at the token
+mint), `call-conversation` (every turn, reply gaps, call notes, outcome —
+`src/lib/calls/callTrace.ts`, when the worker posts the timeline) and its
+transcription. Env, like Resend: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
+`LANGFUSE_BASE_URL`; `LANGFUSE_TRACING=off` keeps prompts but sends no traces
+(they hold lead names and transcripts). Tracing must never break a call:
+failures are logged and swallowed.
+
 ## Sending rules, not constants
 
 Operational numbers — emails a day, send gaps, sending hours, LinkedIn

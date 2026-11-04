@@ -9,7 +9,9 @@
  * the people running the CRM — unlike profile, message and Knowledge text, which
  * the prompts treat as untrusted data. The fixed rules still win: instructions
  * shape tone and judgement, they cannot make the model send, invent facts,
- * leave the taxonomy or break the output format.
+ * leave the taxonomy or break the output format. The wording around them is
+ * part of the crm/draft-system and crm/classify-system prompts
+ * (src/lib/prompts/crm.ts), where the rendered text is the `instructions` variable.
  *
  * Kept free of runtime imports so the settings UI can share the types and caps.
  */
@@ -24,21 +26,6 @@ export const MAX_AI_INSTRUCTION_TITLE_LENGTH = 200;
 export const MAX_AI_INSTRUCTION_CONTENT_LENGTH = 8_000;
 /** Across every block of one list, as rendered into the prompt. */
 export const MAX_AI_INSTRUCTIONS_TOTAL_LENGTH = 20_000;
-
-export type AiInstructionsPurpose = "draft" | "classification";
-
-const PREAMBLES: Record<AiInstructionsPurpose, string> = {
-  draft: [
-    "Operator instructions follow, written by the team that runs this CRM.",
-    "Follow them for tone, style, length, wording, positioning and what to offer or avoid.",
-    "They do not override the rules above: never send anything, never claim facts absent from the supplied context, and keep to the channel constraints and the structured output.",
-  ].join(" "),
-  classification: [
-    "Operator instructions follow, written by the team that runs this CRM.",
-    "Use them when judging which category and subcategory a reply belongs to.",
-    "They do not override the rules above: use only the supplied taxonomy keys and answer only through the structured result function.",
-  ].join(" "),
-};
 
 /**
  * Stored blocks → the full text they render to, or null when no block has
@@ -63,22 +50,4 @@ export function formatAiInstructions(blocks: unknown): string | null {
   const text = renderAiInstructions(blocks);
   if (!text) return null;
   return text.length > MAX_AI_INSTRUCTIONS_TOTAL_LENGTH ? text.slice(0, MAX_AI_INSTRUCTIONS_TOTAL_LENGTH) : text;
-}
-
-/** The system prompt, unchanged when there are no instructions. */
-export function withAiInstructions(
-  systemPrompt: string,
-  purpose: AiInstructionsPurpose,
-  instructions: string | null | undefined,
-): string {
-  const clean = instructions?.trim();
-  if (!clean) return systemPrompt;
-  return [
-    systemPrompt,
-    "",
-    PREAMBLES[purpose],
-    "<operator_instructions>",
-    clean,
-    "</operator_instructions>",
-  ].join("\n");
 }

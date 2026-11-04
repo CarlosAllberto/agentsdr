@@ -15,7 +15,7 @@
  * only names the model.
  */
 
-import type { AgentOutcomeKind } from "../../../src/lib/calls/contract";
+import type { AgentCallNotes, AgentOutcomeKind } from "../../../src/lib/calls/contract";
 import type { AgentTokenResult } from "./messages";
 
 type Handlers = {
@@ -131,6 +131,14 @@ export class LiveAgent {
   private voicedThisTurn = false;
   /** wait_for_them: silence is expected until then, or until they speak. */
   private waitingUntil = 0;
+  /** The server's call notes (its prompts, kept in Langfuse); these copies until the token arrives or for an older server. */
+  private notes: AgentCallNotes = {
+    greeting: GREETING_PROMPT,
+    silenceCheck: SILENCE_CHECK_NOTE,
+    carryOn: CARRY_ON_NOTE,
+    sayGoodbye: SAY_GOODBYE_NOTE,
+    silenceGoodbye: SILENCE_GOODBYE_NOTE,
+  };
   private hangupPending: { reason: string; voiced: boolean; timers: ReturnType<typeof setTimeout>[] } | null = null;
   /** The test option's copy of exactly what is sent to the model (null when off). */
   private heard: Int16Array[] | null = null;
@@ -147,6 +155,7 @@ export class LiveAgent {
       console.warn("[agentsdr agent] no session:", result.error);
       return;
     }
+    if (result.notes) this.notes = { ...this.notes, ...result.notes };
     if (result.saveHeardAudio) {
       this.heard = [];
       this.handlers.trace("AI agent: saving what it hears (test option)");
@@ -278,7 +287,7 @@ export class LiveAgent {
 
   private sendGreeting(): void {
     this.greetPending = false;
-    this.socket?.send(JSON.stringify({ realtimeInput: { text: GREETING_PROMPT } }));
+    this.socket?.send(JSON.stringify({ realtimeInput: { text: this.notes.greeting } }));
   }
 
   private releaseGreeting(why: string): void {
@@ -306,8 +315,8 @@ export class LiveAgent {
       const now = Date.now();
       if (now < this.waitingUntil) return;
       const quiet = now - Math.max(this.playUntil, this.lastVoiceAt, this.lastNoteAt, this.pickedUpAt);
-      if (this.silenceNotes === 0 && quiet >= SILENCE_CHECK_MS) this.note(SILENCE_CHECK_NOTE, `silent ${Math.round(quiet / 1000)} s — checking they are there`);
-      else if (this.silenceNotes === 1 && quiet >= SILENCE_GOODBYE_MS) this.note(SILENCE_GOODBYE_NOTE, `still silent ${Math.round(quiet / 1000)} s — saying goodbye`);
+      if (this.silenceNotes === 0 && quiet >= SILENCE_CHECK_MS) this.note(this.notes.silenceCheck, `silent ${Math.round(quiet / 1000)} s — checking they are there`);
+      else if (this.silenceNotes === 1 && quiet >= SILENCE_GOODBYE_MS) this.note(this.notes.silenceGoodbye, `still silent ${Math.round(quiet / 1000)} s — saying goodbye`);
       else if (this.silenceNotes >= 2 && quiet >= SILENCE_HANGUP_MS) {
         this.ending = true;
         this.handlers.trace("AI agent: no answer after its goodbye — hanging up");
@@ -395,13 +404,13 @@ export class LiveAgent {
           if (voiced) this.hangUp();
           else {
             this.handlers.trace("AI agent: silent after a tool call — asking it to say goodbye");
-            this.socket?.send(JSON.stringify({ realtimeInput: { text: SAY_GOODBYE_NOTE } }));
+            this.socket?.send(JSON.stringify({ realtimeInput: { text: this.notes.sayGoodbye } }));
           }
         } else if (!voiced && tools.some((tool) => tool !== "wait_for_them")) {
           // Spoke nothing at all this turn: it went quiet after the tool. A turn that
           // spoke (often ending in a question) waits for the person instead.
           this.handlers.trace("AI agent: silent after a tool call — asking it to carry on");
-          this.socket?.send(JSON.stringify({ realtimeInput: { text: CARRY_ON_NOTE } }));
+          this.socket?.send(JSON.stringify({ realtimeInput: { text: this.notes.carryOn } }));
         }
       }
     }

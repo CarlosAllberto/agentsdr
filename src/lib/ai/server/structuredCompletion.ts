@@ -6,6 +6,7 @@ import {
   toolCallSystemPrompt,
   type OpenRouterModelSelection,
 } from "@/lib/ai/openrouter-types";
+import { getPrompt, getPromptTemplate, traceGeneration, type ResolvedPrompt } from "@/lib/observability/langfuse";
 import { getOpenRouterRuntime } from "./runtime";
 
 /**
@@ -34,6 +35,11 @@ import { getOpenRouterRuntime } from "./runtime";
  * finishing with `length` and no call, and neither `reasoning.effort` nor
  * `reasoning.max_tokens` capped it reliably. A `length` finish is therefore
  * retried with double the output budget each time.
+ *
+ * The whole completion, every attempt, is one Langfuse generation: the
+ * messages sent, the prompt versions they came from (the caller's, plus
+ * shared/structured-output), the parsed arguments, and the tokens and cost
+ * of all attempts together.
  */
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -62,6 +68,17 @@ export type StructuredCompletionInput = {
   onRequest?: (request: Record<string, unknown>) => void;
   maxAttempts?: number;
   signal?: AbortSignal;
+  /** How the call appears in Langfuse. Never put secrets in metadata. */
+  trace?: StructuredCompletionTrace;
+};
+
+export type StructuredCompletionTrace = {
+  /** e.g. "crm-draft"; defaults to the schema name. */
+  name: string;
+  /** The prompts the system and user text were built from. */
+  prompts?: ResolvedPrompt[];
+  metadata?: Record<string, unknown>;
+  sessionId?: string;
 };
 
 export type StructuredCompletionResult = {
@@ -126,9 +143,17 @@ type StructuredChatResponse = {
       tool_calls?: Array<{ type: string; function?: { name: string; arguments: string } }>;
     };
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
   error?: unknown;
 };
+
+function parsedOrText(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
 
 export async function completeStructuredWithOpenRouter(
   input: StructuredCompletionInput,
@@ -140,14 +165,21 @@ export async function completeStructuredWithOpenRouter(
   );
   const maxAttempts = Math.max(1, Math.floor(input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
   let outputTokens = input.maxOutputTokens;
+  const [outputRule, defaultDescription] = await Promise.all([
+    getPromptTemplate("shared/structured-output"),
+    input.schemaDescription === undefined ? getPrompt("shared/tool-description") : null,
+  ]);
+  const messages = [
+    { role: "system" as const, content: toolCallSystemPrompt(input.systemPrompt, input.schemaName, outputRule.text) },
+    { role: "user" as const, content: input.userPrompt },
+  ];
+  // Every attempt is paid for, so the trace reports their sum.
+  const spent = { input: 0, output: 0, costUsd: 0, reported: false, costReported: false };
 
   function buildRequest() {
     return {
       model: selection.modelId,
-      messages: [
-        { role: "system" as const, content: toolCallSystemPrompt(input.systemPrompt, input.schemaName) },
-        { role: "user" as const, content: input.userPrompt },
-      ],
+      messages,
       ...openRouterTokenLimit(selection.modelId, outputTokens),
       provider,
       ...(input.plugins?.length ? { plugins: input.plugins } : {}),
@@ -155,8 +187,7 @@ export async function completeStructuredWithOpenRouter(
         type: "function" as const,
         function: {
           name: input.schemaName,
-          description: input.schemaDescription
-            ?? "Submit the structured result. Call it exactly once; it is the only way to answer.",
+          description: input.schemaDescription ?? defaultDescription?.text ?? "",
           parameters: input.jsonSchema,
         },
       }],
@@ -168,6 +199,15 @@ export async function completeStructuredWithOpenRouter(
     const request = buildRequest();
     input.onRequest?.(request);
     const response: StructuredChatResponse = await client.chat.completions.create(request as never, { signal: input.signal });
+    if (response.usage) {
+      spent.reported = true;
+      spent.input += response.usage.prompt_tokens ?? 0;
+      spent.output += response.usage.completion_tokens ?? 0;
+      if (typeof response.usage.cost === "number") {
+        spent.costReported = true;
+        spent.costUsd += response.usage.cost;
+      }
+    }
     // OpenRouter can answer 200 with an `error` body and no `choices`; that
     // used to surface as "undefined is not an object (evaluating 'a.choices[0]')".
     const message = response.choices?.[0]?.message;
@@ -212,19 +252,48 @@ export async function completeStructuredWithOpenRouter(
     };
   }
 
-  let lastError: unknown;
-  for (let index = 0; index < maxAttempts; index += 1) {
-    if (index > 0) {
-      await (dependencies.sleep ?? sleep)(RETRY_BACKOFF_MS[Math.min(index - 1, RETRY_BACKOFF_MS.length - 1)], input.signal);
+  const trace = input.trace;
+  return traceGeneration({
+    name: trace?.name ?? input.schemaName,
+    model: selection.modelId,
+    input: messages,
+    prompts: [...(trace?.prompts ?? []), outputRule, defaultDescription],
+    modelParameters: { max_tokens: input.maxOutputTokens },
+    metadata: {
+      ...trace?.metadata,
+      provider: selection.provider,
+      tool: input.schemaName,
+      ...(input.plugins?.length ? { plugins: input.plugins.map((plugin) => plugin.id) } : {}),
+    },
+    sessionId: trace?.sessionId,
+  }, async (record) => {
+    const report = (attempts: number, output?: unknown) => record({
+      output,
+      usage: spent.reported
+        ? { input: spent.input, output: spent.output, costUsd: spent.costReported ? spent.costUsd : null }
+        : null,
+      metadata: { attempts, ...(outputTokens !== input.maxOutputTokens ? { finalMaxTokens: outputTokens } : {}) },
+    });
+    let lastError: unknown;
+    for (let index = 0; index < maxAttempts; index += 1) {
+      if (index > 0) {
+        await (dependencies.sleep ?? sleep)(RETRY_BACKOFF_MS[Math.min(index - 1, RETRY_BACKOFF_MS.length - 1)], input.signal);
+      }
+      try {
+        const result = { ...(await attempt()), attempts: index + 1 };
+        report(result.attempts, parsedOrText(result.text));
+        return result;
+      } catch (error) {
+        lastError = error;
+        const retryable = error instanceof RejectedAttemptError || isRetryableOpenRouterError(error);
+        if (!retryable || input.signal?.aborted) {
+          report(index + 1);
+          throw error;
+        }
+      }
     }
-    try {
-      return { ...(await attempt()), attempts: index + 1 };
-    } catch (error) {
-      lastError = error;
-      const retryable = error instanceof RejectedAttemptError || isRetryableOpenRouterError(error);
-      if (!retryable || input.signal?.aborted) throw error;
-    }
-  }
-  const reason = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${input.schemaName} failed after ${maxAttempts} attempts: ${reason}`, { cause: lastError });
+    report(maxAttempts);
+    const reason = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`${input.schemaName} failed after ${maxAttempts} attempts: ${reason}`, { cause: lastError });
+  });
 }

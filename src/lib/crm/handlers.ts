@@ -251,7 +251,10 @@ export async function handleClassificationJob(
     if (expected !== context.expectedContextVersion) {
       throw new PermanentCrmJobError("Classification job context is stale");
     }
-    const result = await classifyCrmReply(context.input, dependencies);
+    const result = await classifyCrmReply({
+      ...context.input,
+      trace: { metadata: { crmRecordId: context.recordId, conversationId: context.conversationId, messageId: job.entityId, crmJobId: job.id } },
+    }, dependencies);
     await withCrmTransaction(async (tx) => {
       const appliedResult = await recordAiClassificationInTransaction(tx, {
         recordId: context.recordId,

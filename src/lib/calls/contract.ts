@@ -759,6 +759,19 @@ export type AgentTokenResponse = {
    * a WAV after the call (POST …/heard-audio), to hear what the AI heard.
    */
   saveHeardAudio?: boolean;
+  /**
+   * The call notes the agent is sent mid-call ("[Call note: …]"), from the
+   * server's prompts (Langfuse); an extension without them uses its own copies.
+   */
+  notes?: AgentCallNotes;
+};
+
+export type AgentCallNotes = {
+  greeting: string;
+  silenceCheck: string;
+  carryOn: string;
+  sayGoodbye: string;
+  silenceGoodbye: string;
 };
 
 /** POST /api/call-recorder/calls/:id/heard-audio — body: audio/wav. */

@@ -7,7 +7,7 @@ import { inOrg } from "@/lib/tenancy/scope";
 import { pcm16Wav } from "../../../extensions/whatsapp-recorder/src/wav";
 import { renderAiInstructions } from "@/lib/crm/ai/instructions";
 import { DEFAULT_CALLING_INSTRUCTIONS, fillCallingPlaceholders } from "./callingInstructions";
-import { afterCallFacts, loadAgentContext, loadCampaignKnowledgeIds, type AgentPromptContext } from "./agentContext";
+import { goalVariables, loadAgentContext, loadCampaignKnowledgeIds, type AgentPromptContext } from "./agentContext";
 import {
   AGENT_OUTCOMES,
   AGENT_VOICES,
@@ -17,11 +17,15 @@ import {
   MAX_AGENT_NAME_CHARS,
   type AgentOutcome,
   type AgentTokenRequest,
+  type AgentCallNotes,
   type AgentTokenResponse,
   type RecorderLead,
 } from "./contract";
 import type { callSessions } from "./schema";
 import { CallApiError } from "./sessions";
+import { fillPrompt } from "@/lib/prompts/template";
+import { PROMPTS, type PromptName } from "@/lib/prompts/registry";
+import { getPromptTemplate, getPromptTemplates, recordPastTrace, traceGeneration, type ResolvedPrompt } from "@/lib/observability/langfuse";
 
 type CallSessionRow = typeof callSessions.$inferSelect;
 
@@ -119,11 +123,48 @@ export async function mintAgentToken(row: CallSessionRow, request: AgentTokenReq
   if (row.status !== "pending" && row.status !== "in_progress") {
     throw new CallApiError(409, "This call is already over");
   }
-  const [knowledge, context] = await Promise.all([
+  const [knowledge, context, live, notes] = await Promise.all([
     loadCampaignKnowledgeIds(row.campaignContactId).then((ids) => agentKnowledge(ids)),
     loadAgentContext(row),
+    resolveLiveSetupTemplates(),
+    callNotes(),
   ]);
-  return { ...(await mintLiveToken(liveSetup(request, knowledge, context))), saveHeardAudio: saveHeardAudio() };
+  const setup = liveSetup(request, knowledge, context, live.templates);
+  // Langfuse groups a call's traces (this setup, the conversation, the transcription) by its id.
+  const minted = await traceGeneration(
+    {
+      name: "call-agent-setup",
+      model: LIVE_MODEL,
+      input: { system: setup.systemInstruction.parts[0]?.text, tools: setup.tools, voice: request.voice },
+      prompts: [...live.prompts, ...notes.prompts],
+      sessionId: row.id,
+      metadata: { callId: row.id, personId: row.personId, campaignContactId: row.campaignContactId, direction: row.direction, knowledge: knowledge.map((document) => document.title) },
+    },
+    async (record) => {
+      const token = await mintLiveToken(setup);
+      record({ output: { minted: true, agentName: request.name, voice: request.voice } });
+      return token;
+    },
+  );
+  return { ...minted, saveHeardAudio: saveHeardAudio(), notes: notes.notes };
+}
+
+const CALL_NOTE_PROMPTS = {
+  greeting: "calls/note-greeting",
+  silenceCheck: "calls/note-silence-check",
+  carryOn: "calls/note-carry-on",
+  sayGoodbye: "calls/note-say-goodbye",
+  silenceGoodbye: "calls/note-silence-goodbye",
+} as const satisfies Record<keyof AgentCallNotes, PromptName>;
+
+/** The mid-call notes, from Langfuse (or code), for the extension and rehearsals. */
+export async function callNotes(): Promise<{ notes: AgentCallNotes; prompts: ResolvedPrompt[] }> {
+  const keys = Object.keys(CALL_NOTE_PROMPTS) as (keyof AgentCallNotes)[];
+  const resolved = await getPromptTemplates(keys.map((key) => CALL_NOTE_PROMPTS[key]));
+  return {
+    notes: Object.fromEntries(keys.map((key) => [key, fillPrompt(resolved[CALL_NOTE_PROMPTS[key]].text, {})])) as AgentCallNotes,
+    prompts: Object.values(resolved),
+  };
 }
 
 /**
@@ -131,7 +172,23 @@ export async function mintAgentToken(row: CallSessionRow, request: AgentTokenReq
  * the same setup a campaign call would get, with no call and nothing saved.
  */
 export async function mintRehearsalToken(request: AgentTokenRequest, knowledge: KnowledgeDocument[], context: AgentPromptContext): Promise<AgentTokenResponse> {
-  return mintLiveToken(liveSetup(request, knowledge, context));
+  const [live, notes] = await Promise.all([resolveLiveSetupTemplates(), callNotes()]);
+  const setup = liveSetup(request, knowledge, context, live.templates);
+  const minted = await traceGeneration(
+    {
+      name: "call-voice-rehearsal-setup",
+      model: LIVE_MODEL,
+      input: { system: setup.systemInstruction.parts[0]?.text, tools: setup.tools, voice: request.voice },
+      prompts: [...live.prompts, ...notes.prompts],
+      metadata: { knowledge: knowledge.map((document) => document.title) },
+    },
+    async (record) => {
+      const token = await mintLiveToken(setup);
+      record({ output: { minted: true } });
+      return token;
+    },
+  );
+  return { ...minted, notes: notes.notes };
 }
 
 /** A single-use ephemeral token with `setup` locked in; the API key stays here. */
@@ -159,8 +216,32 @@ async function mintLiveToken(setup: ReturnType<typeof liveSetup>): Promise<Agent
   return { token: body.name, model: `models/${LIVE_MODEL}`, websocketUrl: WEBSOCKET_URL };
 }
 
+/** The Langfuse prompts a live session is built from (src/lib/prompts/calls.ts). */
+export const LIVE_SETUP_PROMPTS = [
+  "calls/agent-system",
+  "calls/tool-record-outcome",
+  "calls/tool-record-outcome-kinds",
+  "calls/tool-wait-for-them",
+  "calls/tool-end-call",
+] as const satisfies readonly PromptName[];
+export type LiveSetupTemplates = Record<(typeof LIVE_SETUP_PROMPTS)[number], string>;
+/** The copies in code: what tests and an unconfigured Langfuse use. */
+export const CODE_LIVE_SETUP_TEMPLATES = Object.fromEntries(LIVE_SETUP_PROMPTS.map((name) => [name, PROMPTS[name].template])) as LiveSetupTemplates;
+
+/** The live templates from Langfuse (or code), with the versions used, for tracing. */
+export async function resolveLiveSetupTemplates(): Promise<{ templates: LiveSetupTemplates; prompts: ResolvedPrompt[] }> {
+  const resolved = await getPromptTemplates(LIVE_SETUP_PROMPTS);
+  const prompts = LIVE_SETUP_PROMPTS.map((name) => resolved[name]);
+  return { templates: Object.fromEntries(prompts.map((prompt) => [prompt.name, prompt.text])) as LiveSetupTemplates, prompts };
+}
+
 /** The Live session, in the API's own JSON shape (BidiGenerateContentSetup). */
-export function liveSetup(request: AgentTokenRequest, knowledge: KnowledgeDocument[], context: AgentPromptContext = {}) {
+export function liveSetup(
+  request: AgentTokenRequest,
+  knowledge: KnowledgeDocument[],
+  context: AgentPromptContext = {},
+  templates: LiveSetupTemplates = CODE_LIVE_SETUP_TEMPLATES,
+) {
   return {
     model: `models/${LIVE_MODEL}`,
     generationConfig: {
@@ -172,22 +253,20 @@ export function liveSetup(request: AgentTokenRequest, knowledge: KnowledgeDocume
     // (23 Oct 2026). Low start-of-speech sensitivity needs clearer speech
     // before it yields; everything else stays at Gemini's defaults.
     realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_LOW" } },
-    systemInstruction: { parts: [{ text: agentInstructions(request, knowledge, context) }] },
+    systemInstruction: { parts: [{ text: agentInstructions(request, knowledge, context, templates["calls/agent-system"]) }] },
     tools: [
       {
         functionDeclarations: [
           {
             name: "record_outcome",
-            description:
-              "Record how the call went, once, before your goodbye. Call it again only if the outcome changes (they agree to a meeting after all).",
+            description: fillPrompt(templates["calls/tool-record-outcome"], {}),
             parameters: {
               type: "OBJECT",
               properties: {
                 outcome: {
                   type: "STRING",
                   enum: [...AGENT_OUTCOMES],
-                  description:
-                    "meeting_booked: they agreed to book a meeting with the team or to receive the booking link. interested: they want to hear more, nothing agreed. human_callback: they want a person from the team to call them. call_back: a bad moment, call them again later. not_interested. wrong_person: not who you were calling. do_not_contact: they asked never to be contacted again. no_response: they never really answered. other.",
+                  description: fillPrompt(templates["calls/tool-record-outcome-kinds"], {}),
                 },
                 summary: { type: "STRING", description: "One sentence on what happened and anything they asked for." },
                 when: {
@@ -205,14 +284,12 @@ export function liveSetup(request: AgentTokenRequest, knowledge: KnowledgeDocume
           },
           {
             name: "wait_for_them",
-            description:
-              "They asked you to wait or hold on (\"one second\", \"ek minute\"). Say a short okay, call this, then stay quiet until they speak again.",
+            description: fillPrompt(templates["calls/tool-wait-for-them"], {}),
             parameters: { type: "OBJECT", properties: {} },
           },
           {
             name: "end_call",
-            description:
-              "Hang up the call. Only after you have said goodbye, and only when the person said goodbye or asked to end the call, the call reached its goal, they clearly said no, or a call note tells you to. Never because of a question, a complaint or a request — answer those instead.",
+            description: fillPrompt(templates["calls/tool-end-call"], {}),
             parameters: {
               type: "OBJECT",
               properties: { reason: { type: "STRING", description: "Why the call is ending, in a few words." } },
@@ -227,77 +304,43 @@ export function liveSetup(request: AgentTokenRequest, knowledge: KnowledgeDocume
 }
 
 /**
- * The agent's instructions: a short fixed part about being on a phone call,
- * then everything the organization writes. Only what the calling system
- * depends on is fixed here: that it is a live cold phone call (one voice, one
- * point at a time, wait for answers), who the agent is, honesty that it is an
- * AI, what will actually happen after the call (so it promises nothing the
- * system does not do), and its tools. How it opens, pitches, handles
- * objections, proposes the next step and ends belongs to the calling
- * instructions (Settings → Instructions → Calling; the defaults in
- * callingInstructions.ts). Rules like "never quote a number unless asked"
- * used to sit here, out of sight, and overrode what organizations wrote
- * (persona test, 4 Nov 2026).
+ * The agent's system prompt (calls/agent-system in Langfuse): a short fixed
+ * part about being on a phone call, then everything the organization writes.
+ * Only what the calling system depends on is worded there: that it is a live
+ * cold phone call (one voice, one point at a time, wait for answers), who the
+ * agent is, honesty that it is an AI, what will actually happen after the
+ * call, and its tools. How it opens, pitches, handles objections, proposes
+ * the next step and ends belongs to the calling instructions (Settings →
+ * Instructions → Calling; the defaults in callingInstructions.ts). Rules like
+ * "never quote a number unless asked" used to sit in code, out of sight, and
+ * overrode what organizations wrote (persona test, 4 Nov 2026).
  */
 export function agentInstructions(
   { brief, lead, name, voice }: AgentTokenRequest,
   knowledge: KnowledgeDocument[],
   context: AgentPromptContext = {},
+  template: string = PROMPTS["calls/agent-system"].template,
 ): string {
   const agentName = name ?? DEFAULT_AGENT_NAME;
   const female = (AGENT_VOICES.find((option) => option.id === voice)?.gender ?? "female") === "female";
   const firstName = lead?.firstName?.trim() || null;
-  const who = [lead?.name, lead?.company ?? null, lead?.detail].filter(Boolean).join(", ");
-  return [
-    `You are ${agentName}, on a live phone call over WhatsApp with a real person. Your name is ${agentName}; never use any other name.`,
-    context.inbound
-      ? who
-        ? `${who} called this number back, and you answered.`
-        : "Someone called this number and you answered. You do not know their name: ask it naturally."
-      : who
-        ? `You are calling ${who}. It is a cold call: they did not expect it.`
-        : "You do not know the person's name: ask it naturally if it matters.",
-    ...(context.now ? [`It is now ${context.now}.`] : []),
-    "",
-    "This is a phone call, not a text chat. Everything you say is spoken aloud and heard through a phone line; they cannot see anything.",
-    "- Talk the way people talk on the phone: short sentences, one point at a time, then stop and let them answer.",
-    "- When you ask a question, wait for their answer. Never answer it for them or assume a yes.",
-    "- Say numbers the way you would say them aloud. Never read out a link, an email address or a long number.",
-    "- Keep one voice for the whole call: the same accent, pace and tone, in whichever language you speak.",
-    female
-      ? "- You are a woman. In Hindi always use feminine forms for yourself: \"मैं कर रही हूँ\", \"मैं समझ सकती हूँ\", never \"रहा\" or \"सकता\"."
-      : "- You are a man. In Hindi always use masculine forms for yourself: \"मैं कर रहा हूँ\", \"मैं समझ सकता हूँ\".",
-    "- If they sincerely ask whether you are an AI, a bot or a recording, say yes in one short sentence, then offer to carry on or to have a person from the team call them. Never claim to be human.",
-    "",
-    ...afterCallFacts(context.goal ?? null),
-    "",
-    "How the call system works:",
-    "- Once you know how the call went, call record_outcome. It is silent: keep talking after it.",
-    "- If they ask you to wait or hold on, call wait_for_them and stay quiet until they speak again.",
-    "- When the call is over, say goodbye out loud, then call end_call.",
-    "- Text in square brackets that starts with \"[Call note:\" comes from the calling system, not from the person. Follow it and never mention it.",
-    "",
-    "What this call is for, from the team that set it up:",
-    "<brief>",
+  return fillPrompt(template, {
+    agent_name: agentName,
+    who: [lead?.name, lead?.company ?? null, lead?.detail].filter(Boolean).join(", "),
+    inbound: !!context.inbound,
+    now: context.now ?? null,
+    female,
+    ...goalVariables(context.goal ?? null),
     brief,
-    "</brief>",
-    ...(knowledge.length
-      ? [
-          "",
-          `What you know about the company you are calling for. People it names (a founder, a contact) are your team; you are still ${agentName}.`,
-          "<knowledge>",
-          ...knowledge.map((document) => `## ${document.title}\n${document.content}`),
-          "</knowledge>",
-        ]
-      : []),
-    ...(context.history ? ["", context.history] : []),
-    "",
-    "How to run the call — your team's calling instructions:",
-    renderAiInstructions(context.callingInstructions?.length ? context.callingInstructions : DEFAULT_CALLING_INSTRUCTIONS)
-      ?.split("\n")
-      .map((line) => fillCallingPlaceholders(line, { agentName, firstName }))
-      .join("\n") ?? "",
-  ].join("\n");
+    knowledge: knowledge.map((document) => `## ${document.title}\n${document.content}`).join("\n"),
+    history: context.history?.lines ?? null,
+    spoke_before: !!context.history?.spokeBefore,
+    calling_instructions:
+      renderAiInstructions(context.callingInstructions?.length ? context.callingInstructions : DEFAULT_CALLING_INSTRUCTIONS)
+        ?.split("\n")
+        .map((line) => fillCallingPlaceholders(line, { agentName, firstName }))
+        .join("\n") ?? "",
+  });
 }
 
 export type KnowledgeDocument = { title: string; content: string };
@@ -363,9 +406,6 @@ export type RehearsalResult = { reply: string; tools: { name: string; args: Reco
 
 const REHEARSAL_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const REHEARSAL_TIMEOUT_MS = 25_000;
-/** The same notes live-agent.ts (the extension) sends on a real call. */
-const GREETING_NOTE = "[Call note: the call has just connected and the person is on the line. Open the call now.]";
-const CARRY_ON_NOTE = "[Call note: noted. Carry on the call from where it was.]";
 
 /**
  * One agent turn of a rehearsal: the real session setup (liveSetup, so the
@@ -381,12 +421,37 @@ export async function rehearseAgent(
 ): Promise<RehearsalResult> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new CallApiError(409, "The AI voice agent is not set up on this server (GEMINI_API_KEY is missing)");
+  // The same notes the extension sends on a real call.
+  const [live, notes] = await Promise.all([resolveLiveSetupTemplates(), callNotes()]);
+  const setup = liveSetup(request, knowledge, context, live.templates);
   const history = [
-    { role: "user", parts: [{ text: GREETING_NOTE }] },
+    { role: "user", parts: [{ text: notes.notes.greeting }] },
     ...turns.map((turn) => ({ role: turn.role === "lead" ? "user" : "model", parts: [{ text: turn.text }] })),
   ];
 
-  return await new Promise<RehearsalResult>((resolve, reject) => {
+  return traceGeneration(
+    {
+      name: "call-rehearsal",
+      model: LIVE_MODEL,
+      input: { system: setup.systemInstruction.parts[0]?.text, turns },
+      prompts: [...live.prompts, ...notes.prompts],
+      metadata: { knowledge: knowledge.map((document) => document.title) },
+    },
+    async (record) => {
+      const result = await rehearseOnce(apiKey, setup, history, notes.notes.carryOn);
+      record({ output: result });
+      return result;
+    },
+  );
+}
+
+function rehearseOnce(
+  apiKey: string,
+  setup: ReturnType<typeof liveSetup>,
+  history: { role: string; parts: { text: string }[] }[],
+  carryOnNote: string,
+): Promise<RehearsalResult> {
+  return new Promise<RehearsalResult>((resolve, reject) => {
     const socket = new WebSocket(`${REHEARSAL_URL}?key=${encodeURIComponent(apiKey)}`);
     socket.binaryType = "arraybuffer";
     let reply = "";
@@ -405,7 +470,7 @@ export async function rehearseAgent(
     };
     const timer = setTimeout(() => finish(new CallApiError(504, "The agent did not answer in time")), REHEARSAL_TIMEOUT_MS);
 
-    socket.addEventListener("open", () => socket.send(JSON.stringify({ setup: liveSetup(request, knowledge, context) })));
+    socket.addEventListener("open", () => socket.send(JSON.stringify({ setup })));
     socket.addEventListener("error", () => finish(new CallApiError(424, "Could not reach Gemini Live")));
     socket.addEventListener("close", (event) => finish(new CallApiError(424, `Gemini closed the session${event.reason ? `: ${event.reason}` : ""}`)));
     socket.addEventListener("message", (event) => {
@@ -435,7 +500,7 @@ export async function rehearseAgent(
         // The live model goes silent after a tool call: ask it, once, to carry on.
         if (!reply.trim() && tools.length && !nudged) {
           nudged = true;
-          socket.send(JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text: CARRY_ON_NOTE }] }], turnComplete: true } }));
+          socket.send(JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text: carryOnNote }] }], turnComplete: true } }));
           return;
         }
         finish(null);
@@ -471,12 +536,21 @@ export function voiceSample(voice: string | null, name: string | null): Promise<
 
 async function speakSample(voice: string, name: string): Promise<Uint8Array<ArrayBuffer>> {
   const female = (AGENT_VOICES.find((option) => option.id === voice)?.gender ?? "female") === "female";
+  const [system, sampleLines] = await Promise.all([getPromptTemplate("calls/voice-sample-system"), getPromptTemplate("calls/voice-sample-lines")]);
   // One line per session: given two, the live model often spoke only one (27 Oct 2026).
-  const lines = [
-    `Hi, this is ${name} — did I catch you at an okay time?`,
-    `Namaste, main ${name} bol ${female ? "rahi" : "raha"} hoon — kya abhi do minute baat ho sakti hai?`,
-  ];
-  const spoken = await Promise.all(lines.map((line) => speakLine(voice, line)));
+  const lines = fillPrompt(sampleLines.text, { agent_name: name, female })
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const instruction = fillPrompt(system.text, {});
+  const spoken = await traceGeneration(
+    { name: "call-voice-sample", model: LIVE_MODEL, input: { system: instruction, lines }, prompts: [system, sampleLines], metadata: { voice } },
+    async (record) => {
+      const result = await Promise.all(lines.map((line) => speakLine(voice, line, instruction)));
+      record({ output: { lines: result.length, seconds: result.reduce((sum, part) => sum + part.pcm.length / part.rate, 0) } });
+      return result;
+    },
+  );
   const rate = spoken[0]!.rate;
   const pause = new Int16Array(Math.round(rate * 0.5));
   const parts = spoken.flatMap((part, index) => (index ? [pause, part.pcm] : [part.pcm]));
@@ -490,11 +564,11 @@ async function speakSample(voice: string, name: string): Promise<Uint8Array<Arra
 }
 
 /** One line in `voice`; about one session in four ends without a word, so it tries three times. */
-async function speakLine(voice: string, line: string): Promise<{ pcm: Int16Array; rate: number }> {
+async function speakLine(voice: string, line: string, instruction: string): Promise<{ pcm: Int16Array; rate: number }> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const spoken = await speakOnce(voice, line);
+      const spoken = await speakOnce(voice, line, instruction);
       if (spoken.pcm.length > spoken.rate / 2) return spoken;
       lastError = new CallApiError(424, "Gemini returned no speech for the sample");
     } catch (error) {
@@ -504,7 +578,7 @@ async function speakLine(voice: string, line: string): Promise<{ pcm: Int16Array
   throw lastError;
 }
 
-async function speakOnce(voice: string, line: string): Promise<{ pcm: Int16Array; rate: number }> {
+async function speakOnce(voice: string, line: string, instruction: string): Promise<{ pcm: Int16Array; rate: number }> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new CallApiError(409, "The AI voice agent is not set up on this server (GEMINI_API_KEY is missing)");
   const chunks: Int16Array[] = [];
@@ -530,7 +604,7 @@ async function speakOnce(voice: string, line: string): Promise<{ pcm: Int16Array
           model: `models/${LIVE_MODEL}`,
           generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
           systemInstruction: {
-            parts: [{ text: "You are a voice actor recording a phone-call demo. Speak the line you are given exactly, warmly and naturally, as the caller would, and say nothing else." }],
+            parts: [{ text: instruction }],
           },
         },
       })),

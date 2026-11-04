@@ -274,6 +274,11 @@ async function loadDraftContext(
   };
 }
 
+/** The draft's ids, for its Langfuse trace. */
+function draftTrace(prepared: PreparedDraft) {
+  return { metadata: { crmDraftId: prepared.draft.id, crmRecordId: prepared.draft.crmRecordId } };
+}
+
 async function finishGeneratedDraft(
   prepared: PreparedDraft,
   generated: Awaited<ReturnType<typeof generateCrmDraft>>,
@@ -518,7 +523,7 @@ export async function generateFallbackDraft(
   const prepared = await withCrmTransaction((tx) => loadFallbackDraftContext(tx, recordId));
   if (!prepared) return null;
   try {
-    const generated = await generateCrmDraft({ ...prepared.promptInput, revision }, dependencies);
+    const generated = await generateCrmDraft({ ...prepared.promptInput, revision, trace: draftTrace(prepared) }, dependencies);
     return await finishGeneratedDraft(prepared, generated);
   } catch (error) {
     await failDraftGeneration(prepared.draft.id, error);
@@ -534,7 +539,7 @@ export async function generateDraftForStep(
 ): Promise<CrmDraft> {
   const prepared = await withCrmTransaction((tx) => loadDraftContext(tx, stepRunId, regenerating));
   try {
-    const generated = await generateCrmDraft({ ...prepared.promptInput, revision }, dependencies);
+    const generated = await generateCrmDraft({ ...prepared.promptInput, revision, trace: draftTrace(prepared) }, dependencies);
     return await finishGeneratedDraft(prepared, generated, { personRequested: regenerating });
   } catch (error) {
     await failDraftGeneration(prepared.draft.id, error);

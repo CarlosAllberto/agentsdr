@@ -8,6 +8,7 @@ import { personCompanyName } from "@/lib/leads/companyName";
 import { getPlatformCredentials } from "@/lib/platform/credentials";
 import { currentOrganizationId, inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { callSessions, callingProxies, callingStations } from "./schema";
+import { traceAgentConversation } from "./callTrace";
 import { requireProxy, workerProxy } from "./proxies";
 import { deleteObject, headRecording, presignRecordingDownload, presignRecordingUpload, stationProfileKey } from "./storage";
 import { normalizePhone } from "./phone";
@@ -809,10 +810,13 @@ export function parseTimelineRequest(value: unknown): CallTimelineEntry[] {
 export async function saveCallTimeline(id: string, entries: CallTimelineEntry[]): Promise<void> {
   const row = await workerCallRow(id);
   await runInOrganization(row.organizationId, async () => {
-    await db
+    const [saved] = await db
       .update(callSessions)
       .set({ timeline: entries, updatedAt: new Date() })
-      .where(and(inOrg(callSessions), eq(callSessions.id, row.id)));
+      .where(and(inOrg(callSessions), eq(callSessions.id, row.id)))
+      .returning();
+    // The worker sends the timeline once the call is over: the conversation goes to Langfuse.
+    if (saved) traceAgentConversation(saved);
   });
 }
 

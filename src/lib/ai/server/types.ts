@@ -1,6 +1,9 @@
 import "server-only";
 
 import type { AiConfig } from "@/lib/grid/types";
+import type { ResolvedPrompt } from "@/lib/observability/langfuse";
+import { fillPrompt } from "@/lib/prompts/template";
+import type { PromptTemplates } from "@/lib/prompts/templates";
 import type { AiModelDefinition } from "../types";
 
 /** What one row's AI call receives. */
@@ -19,6 +22,8 @@ export type AiRunInput = {
   examples: Array<{ input: string; response: string }>;
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Added to the call's Langfuse trace: the cell's ids, and prompts the caller built the input from. */
+  trace?: { metadata?: Record<string, unknown>; prompts?: ResolvedPrompt[] };
 };
 
 export type AiRunResult = {
@@ -32,6 +37,22 @@ export type AiRunResult = {
 };
 
 export type AiRunner = (input: AiRunInput) => Promise<AiRunResult>;
+
+/** The prompts a row's system message is built from (src/lib/prompts/grid.ts). */
+export const FILL_ROW_PROMPTS = ["grid/fill-row-system", "grid/fill-row-example"] as const;
+export type FillRowTemplates = PromptTemplates<(typeof FILL_ROW_PROMPTS)[number]>;
+
+/** The system message for one row: structured answers come back through a function, plain ones as bare text. */
+export function fillRowSystemPrompt(
+  templates: FillRowTemplates,
+  structured: boolean,
+  examples: AiRunInput["examples"],
+): string {
+  return fillPrompt(templates["grid/fill-row-system"], {
+    structured,
+    examples: examples.map((example) => fillPrompt(templates["grid/fill-row-example"], example)).join("\n\n"),
+  });
+}
 
 /**
  * The instruction appended when the user picked "Fields".

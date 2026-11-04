@@ -53,6 +53,15 @@ describe("completeStructuredWithOpenRouter", () => {
     assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 5 });
   });
 
+  test("tells the model the call is the answer, with the shared prompts from code when Langfuse is off", async () => {
+    const { runtime, requests } = scripted([{ toolArgs: '{"category":"a"}' }]);
+    await completeStructuredWithOpenRouter(input, { runtime, sleep: noSleep });
+    const request = requests[0] as { messages: Array<{ content: string }>; tools: Array<{ function: { description: string } }> };
+    assert.equal(request.messages[0]!.content, "Classify.\n\nYou must answer by calling the submit function exactly once with every required argument. Never answer in prose.");
+    assert.equal(request.messages[1]!.content, "Hello");
+    assert.equal(request.tools[0]!.function.description, "Submit the structured result. Call it exactly once; it is the only way to answer.");
+  });
+
   test("retries when the model answers in prose instead of calling the tool", async () => {
     const { runtime } = scripted([{ content: "Sure! It is category a." }, { toolArgs: '{"category":"a"}' }]);
     const result = await completeStructuredWithOpenRouter(input, { runtime, sleep: noSleep });

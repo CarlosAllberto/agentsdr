@@ -3,6 +3,11 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { inOrg } from "@/lib/tenancy/scope";
 import { completeStructuredWithOpenRouter } from "@/lib/ai/server/structuredCompletion";
+import type { ResolvedPrompt } from "@/lib/observability/langfuse";
+import type { PromptName } from "@/lib/prompts/registry";
+import { fillPrompt } from "@/lib/prompts/template";
+import { codeTemplates, type PromptTemplates } from "@/lib/prompts/templates";
+import { resolveTemplates } from "@/lib/prompts/templates.server";
 import { gridColumns, gridRows, gridTables } from "./schema";
 import { inOrgTables } from "./scope";
 import { effectiveColumnType } from "./value-types";
@@ -29,43 +34,62 @@ export async function generateFormula(tableId: string, request: string, currentE
   }));
 
   const sample = await sampleRow(tableId, schema.find((table) => table.current)?.columns ?? []);
+  const { templates, prompts } = await resolveTemplates(FORMULA_PROMPTS);
 
-  let feedback: string | undefined;
+  let rejected: { formula: string; problem: string } | undefined;
   let lastProblem = "";
   // One retry: the first miss is usually a stray Excel habit the error message fixes.
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const { formula, explanation } = await askModel(schema, request, currentExpression, feedback);
+    const { formula, explanation } = await askModel(
+      buildFormulaPrompt({ schema, request, currentExpression, rejected }, templates),
+      { prompts: rejected ? prompts : prompts.filter((prompt) => prompt.name !== "grid/formula-retry"), metadata: { tableId, attempt: attempt + 1 } },
+    );
     const problem = await formulaProblem(tableId, formula, sample);
     if (!problem) return { formula, explanation: explanation || "Generated from your request." };
     lastProblem = problem;
-    feedback = `Your previous formula was rejected.\nFormula: ${formula}\nProblem: ${problem}\nReturn a corrected formula.`;
+    rejected = { formula, problem };
   }
   throw new Error(`The AI could not produce a working formula (${lastProblem}). Try rephrasing the request.`);
 }
 
-const LANGUAGE_RULES = [
-  "Generate one safe formula expression for a spreadsheet-like grid.",
-  "The formula language is a single JavaScript expression, NOT Excel syntax.",
-  "Join text with +  (or CONCATENATE / template literals). Never use & for text: in JavaScript it is bitwise AND and yields 0. Use !== for not-equal, never <>, and == / === for equality, never a lone =.",
-  "Current-row columns MUST be referenced as {{stableKey}} using only keys from the current table; a token is replaced by the cell value as a JavaScript literal (null when empty), so guard empty cells, e.g. ({{name}} || \"\").",
-  "Available globals: lodash as _, moment, and FormulaJS functions called by name, such as IF, AND, OR, CONCATENATE, SUM, ROUND, UPPER, LOWER, TEXT. Example: UPPER({{name}}) + \"-\" + {{domain}}",
-  'For another table use LOOKUP("Table name", {{currentRowKey}}, "Lookup column name", "Return column name") exactly. It returns the first exact match or null. An optional fifth argument is the default value.',
-  "LOOKUP table and column arguments must be quoted literal names from the supplied schema.",
-  "Return an expression only in formula; do not include markdown, a leading equals sign, assignments, statements, network calls, or explanations inside it.",
-].join("\n");
+/** The prompts a formula is generated from (src/lib/prompts/grid.ts). */
+export const FORMULA_PROMPTS = [
+  "grid/formula-system",
+  "grid/formula-user",
+  "grid/formula-retry",
+] as const satisfies readonly PromptName[];
+export type FormulaTemplates = PromptTemplates<(typeof FORMULA_PROMPTS)[number]>;
+
+/**
+ * The rules quote column tokens such as {{name}} as examples; they are passed
+ * through as themselves, since an unknown {{token}} would be filled with "".
+ */
+/** The generator's system and user messages; `rejected` is the previous attempt on a retry. */
+export function buildFormulaPrompt(
+  input: { schema: unknown; request: string; currentExpression?: string; rejected?: { formula: string; problem: string } },
+  templates: FormulaTemplates = codeTemplates(FORMULA_PROMPTS),
+): { systemPrompt: string; userPrompt: string } {
+  return {
+    systemPrompt: fillPrompt(templates["grid/formula-system"], {}),
+    userPrompt: fillPrompt(templates["grid/formula-user"], {
+      schema_json: JSON.stringify(input.schema),
+      request: input.request,
+      current_expression: input.currentExpression,
+      feedback: input.rejected ? fillPrompt(templates["grid/formula-retry"], input.rejected) : null,
+    }),
+  };
+}
 
 async function askModel(
-  schema: unknown,
-  request: string,
-  currentExpression: string | undefined,
-  feedback: string | undefined,
+  prompt: { systemPrompt: string; userPrompt: string },
+  trace: { prompts: ResolvedPrompt[]; metadata: Record<string, unknown> },
 ): Promise<{ formula: string; explanation: string }> {
   let result: Awaited<ReturnType<typeof completeStructuredWithOpenRouter>>;
   try {
     result = await completeStructuredWithOpenRouter({
       timeoutMs: 30_000,
-      systemPrompt: LANGUAGE_RULES,
-      userPrompt: `Workbook schema:\n${JSON.stringify(schema)}\n\nUser request:\n${request}${currentExpression ? `\n\nCurrent formula to improve:\n${currentExpression}` : ""}${feedback ? `\n\n${feedback}` : ""}`,
+      systemPrompt: prompt.systemPrompt,
+      userPrompt: prompt.userPrompt,
       maxOutputTokens: 800,
       jsonSchema: {
         type: "object",
@@ -77,6 +101,7 @@ async function askModel(
         },
       },
       schemaName: "generate_formula",
+      trace: { name: "grid-formula", ...trace },
     });
   } catch (error) {
     throw new FormulaGeneratorUnavailableError(error instanceof Error ? error.message : "OpenRouter AI is not configured");

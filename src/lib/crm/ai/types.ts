@@ -1,4 +1,5 @@
 import type { OpenRouterModelSelection } from "@/lib/ai/openrouter-types";
+import type { StructuredCompletionTrace } from "@/lib/ai/server/structuredCompletion";
 import type { CrmCategoryKey, CrmChannel } from "../schema";
 import type { ClassificationApplicationDecision } from "../stateMachine";
 
@@ -154,6 +155,7 @@ export type ClassificationCompletionInput = {
   timeoutMs: number;
   maxOutputTokens: number;
   signal?: AbortSignal;
+  trace?: StructuredCompletionTrace;
 };
 
 export type ClassificationCompletionResult = {
@@ -181,6 +183,8 @@ export type ClassifyCrmReplyInput = ClassificationContextInput & {
   maxOutputTokens?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** What the caller adds to the Langfuse trace: another name, record ids, prompts it built the input from. */
+  trace?: Partial<StructuredCompletionTrace>;
 };
 
 export type CrmClassificationResult = CrmClassifierOutput & {

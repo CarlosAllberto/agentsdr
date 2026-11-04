@@ -1,3 +1,6 @@
+import { PROMPTS } from "@/lib/prompts/registry";
+import { fillPrompt } from "@/lib/prompts/template";
+
 export type OpenRouterModelSummary = {
   id: string;
   canonicalSlug?: string;
@@ -163,7 +166,15 @@ export function isRetryableOpenRouterError(error: unknown): boolean {
     && ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EPIPE", "EAI_AGAIN"].includes(candidate.code);
 }
 
-/** The tool schema carries the shape; the prompt only has to say that the call is the answer. */
-export function toolCallSystemPrompt(systemPrompt: string, schemaName: string): string {
-  return `${systemPrompt}\n\nYou must answer by calling the ${schemaName} function exactly once with every required argument. Never answer in prose.`;
+/**
+ * The tool schema carries the shape; the prompt only has to say that the call
+ * is the answer (shared/structured-output, the Langfuse version when the
+ * caller has it).
+ */
+export function toolCallSystemPrompt(
+  systemPrompt: string,
+  schemaName: string,
+  template: string = PROMPTS["shared/structured-output"].template,
+): string {
+  return `${systemPrompt}\n\n${fillPrompt(template, { schema_name: schemaName })}`;
 }

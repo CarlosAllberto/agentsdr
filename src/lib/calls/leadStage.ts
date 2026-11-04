@@ -5,6 +5,7 @@ import { and, asc, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { classifyCrmReply } from "@/lib/crm/ai/classify";
+import { getPromptTemplate } from "@/lib/observability/langfuse";
 import type { CrmClassificationResult } from "@/lib/crm/ai/types";
 import type { CrmEventActor } from "@/lib/crm/events";
 import { setPersonDoNotContactInTransaction } from "@/lib/crm/policies";
@@ -410,43 +411,48 @@ async function classifyCallTranscriptUnsafe(callId: string): Promise<void> {
     customerRequiresReview: settings[0]?.customerRequiresReview ?? true,
   };
 
-  const result = await classifyCrmReply(buildCallClassificationInput({
-    callId,
-    occurredAt: call.endedAt ?? callStartedAt,
-    transcript: call.transcript,
-    categories: categories.map((category) => ({ key: category.key as CrmCategoryKey, label: category.label })),
-    subcategories: subcategories.map((subcategory) => ({
-      id: subcategory.id,
-      categoryKey: subcategory.categoryKey as CrmCategoryKey,
-      key: subcategory.key,
-      name: subcategory.name,
-      description: subcategory.description,
-      classificationGuidance: subcategory.classificationGuidance,
-      reviewRequired: subcategory.reviewRequired,
-      stageRank: subcategory.stageRank,
-    })),
-    person: {
-      id: person.id,
-      fullName: person.fullName,
-      firstName: person.firstName,
-      lastName: person.lastName,
-      email: person.email,
-      linkedinUrl: person.linkedinUrl,
-      title: person.title,
-    },
-    company: company ? { id: company.id, name: company.name, domain: company.domain, linkedinUrl: company.linkedinUrl } : null,
-    currentClassification: {
-      categoryKey: (current.record?.categoryKey ?? null) as CrmCategoryKey | null,
-      subcategoryKey: currentSubcategory?.key ?? null,
-      categorySource: current.record?.categorySource ?? null,
-      categoryLocked: current.record?.categoryLocked ?? false,
-      stageRank: currentSubcategory?.stageRank ?? null,
-    },
-    campaign: { id: campaign.id, name: campaign.name, description: campaign.description },
-    knowledge,
-    policy,
-    instructions: formatAiInstructions(settings[0]?.classificationInstructions),
-  }));
+  const transcriptPrompt = await getPromptTemplate("crm/classify-call-transcript");
+  const result = await classifyCrmReply({
+    ...buildCallClassificationInput({
+      callId,
+      occurredAt: call.endedAt ?? callStartedAt,
+      transcript: call.transcript,
+      categories: categories.map((category) => ({ key: category.key as CrmCategoryKey, label: category.label })),
+      subcategories: subcategories.map((subcategory) => ({
+        id: subcategory.id,
+        categoryKey: subcategory.categoryKey as CrmCategoryKey,
+        key: subcategory.key,
+        name: subcategory.name,
+        description: subcategory.description,
+        classificationGuidance: subcategory.classificationGuidance,
+        reviewRequired: subcategory.reviewRequired,
+        stageRank: subcategory.stageRank,
+      })),
+      person: {
+        id: person.id,
+        fullName: person.fullName,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        email: person.email,
+        linkedinUrl: person.linkedinUrl,
+        title: person.title,
+      },
+      company: company ? { id: company.id, name: company.name, domain: company.domain, linkedinUrl: company.linkedinUrl } : null,
+      currentClassification: {
+        categoryKey: (current.record?.categoryKey ?? null) as CrmCategoryKey | null,
+        subcategoryKey: currentSubcategory?.key ?? null,
+        categorySource: current.record?.categorySource ?? null,
+        categoryLocked: current.record?.categoryLocked ?? false,
+        stageRank: currentSubcategory?.stageRank ?? null,
+      },
+      campaign: { id: campaign.id, name: campaign.name, description: campaign.description },
+      knowledge,
+      policy,
+      instructions: formatAiInstructions(settings[0]?.classificationInstructions),
+      transcriptTemplate: transcriptPrompt.text,
+    }),
+    trace: { name: "crm-classify-call", prompts: [transcriptPrompt], sessionId: callId, metadata: { callId } },
+  });
 
   // An AI campaign's lead gets its follow-up date from its engine, which has
   // already acted on the call's outcome; the transcript only sets the stage.

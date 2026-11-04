@@ -1,11 +1,13 @@
 import "server-only";
 import { PermanentRunError, RetryableRunError, aiProviderLabel } from "@/lib/grid/runners/types";
+import { traceGeneration } from "@/lib/observability/langfuse";
+import { resolveTemplates } from "@/lib/prompts/templates.server";
 import { isTransientOpenRouterError } from "./openrouter-errors";
 import { openRouterTokenLimit, strictImageProviderRouting } from "../openrouter-types";
 import { generateOpenRouterImage } from "./openrouter";
 import { getOpenRouterRuntime } from "./runtime";
 import { completeStructuredWithOpenRouter } from "./structuredCompletion";
-import type { AiRunner } from "./types";
+import { FILL_ROW_PROMPTS, fillRowSystemPrompt, type AiRunner } from "./types";
 
 /**
  * OpenRouter answers an upstream failure with a generic message ("Provider
@@ -57,12 +59,15 @@ function webPlugins(config: { useCase: string }, modelId: string) {
   return [modelId.startsWith("google/") ? { id: "web", engine: "exa" } : { id: "web" }];
 }
 
-export const runOpenRouter: AiRunner = async ({ config, model, prompt, schema, examples, timeoutMs, signal }) => {
+export const runOpenRouter: AiRunner = async ({ config, model, prompt, schema, examples, timeoutMs, signal, trace }) => {
   let auditRequest: unknown;
   try {
     if (!config.upstreamProvider) throw new PermanentRunError("Re-save this AI column with an OpenRouter provider");
+    const { templates, prompts } = await resolveTemplates(FILL_ROW_PROMPTS);
+    const used = [...(examples.length ? prompts : prompts.filter((item) => item.name !== "grid/fill-row-example")), ...(trace?.prompts ?? [])];
+    const metadata = { ...trace?.metadata, useCase: config.useCase, outputFormat: config.outputFormat };
+    const system = fillRowSystemPrompt(templates, Boolean(schema), examples);
     if (schema) {
-      const system = ["You are filling in one row of a spreadsheet.", ...examples.map((example) => `Example input:\n${example.input}\nExpected response:\n${example.response}`)].join("\n\n");
       const result = await completeStructuredWithOpenRouter({
         requestedModel: { provider: config.upstreamProvider, modelId: model.modelId },
         timeoutMs,
@@ -74,6 +79,7 @@ export const runOpenRouter: AiRunner = async ({ config, model, prompt, schema, e
         plugins: webPlugins(config, model.modelId),
         onRequest: (request) => { auditRequest = request; },
         signal,
+        trace: { name: "grid-ai-column", prompts: used, metadata },
       });
       auditRequest = result.request;
       return { value: JSON.parse(result.text), usage: result.usage, raw: result.response, request: result.request };
@@ -82,13 +88,23 @@ export const runOpenRouter: AiRunner = async ({ config, model, prompt, schema, e
       { provider: config.upstreamProvider, modelId: model.modelId },
       timeoutMs,
     );
-    const system = ["You are filling in one row of a spreadsheet.", "Respond with the answer only — no preamble.", ...examples.map((example) => `Example input:\n${example.input}\nExpected response:\n${example.response}`)].join("\n\n");
     const tokenLimit = openRouterTokenLimit(model.modelId, config.maxTokens ?? model.maxOutputTokens ?? 16000);
     const request = { model: model.modelId, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], ...tokenLimit, provider, ...(webPlugins(config, model.modelId) ? { plugins: webPlugins(config, model.modelId) } : {}) };
     auditRequest = request;
-    const response = await client.chat.completions.create(request as never, { signal });
-    const text = response.choices[0]?.message.content?.trim() ?? "";
-    return { value: text, usage: { inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens }, raw: response, request };
+    return await traceGeneration({
+      name: "grid-ai-column",
+      model: model.modelId,
+      input: request.messages,
+      prompts: used,
+      modelParameters: { max_tokens: config.maxTokens ?? model.maxOutputTokens ?? 16000 },
+      metadata: { ...metadata, provider: config.upstreamProvider },
+    }, async (record) => {
+      const response = await client.chat.completions.create(request as never, { signal });
+      const text = response.choices[0]?.message.content?.trim() ?? "";
+      const usage = response.usage as (typeof response.usage & { cost?: number }) | undefined;
+      record({ output: text, usage: { input: usage?.prompt_tokens, output: usage?.completion_tokens, costUsd: usage?.cost } });
+      return { value: text, usage: { inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens }, raw: response, request };
+    });
   } catch (error) {
     if (error instanceof PermanentRunError && error.audit) throw error;
     const response = auditError(error);
@@ -104,7 +120,7 @@ export const runOpenRouter: AiRunner = async ({ config, model, prompt, schema, e
   }
 };
 
-export const runOpenRouterImage: AiRunner = async ({ config, model, prompt, timeoutMs, signal }) => {
+export const runOpenRouterImage: AiRunner = async ({ config, model, prompt, timeoutMs, signal, trace }) => {
   let auditRequest: unknown;
   try {
     if (!config.upstreamProvider) throw new PermanentRunError("Re-save this AI column with an OpenRouter provider");
@@ -115,26 +131,40 @@ export const runOpenRouterImage: AiRunner = async ({ config, model, prompt, time
     const provider = strictImageProviderRouting(config.upstreamProvider);
     const request = { model: model.modelId, prompt, n: 1, provider };
     auditRequest = request;
-    const response = await generateOpenRouterImage({
-      apiKey,
+    return await traceGeneration({
+      name: "grid-ai-image",
       model: model.modelId,
-      prompt,
-      provider,
-      timeoutMs,
-      signal,
+      input: prompt,
+      prompts: trace?.prompts,
+      metadata: { ...trace?.metadata, provider: config.upstreamProvider },
+    }, async (record) => {
+      const response = await generateOpenRouterImage({
+        apiKey,
+        model: model.modelId,
+        prompt,
+        provider,
+        timeoutMs,
+        signal,
+      });
+      const image = response.data?.[0];
+      const usage = { input: response.usage?.prompt_tokens, output: response.usage?.completion_tokens, costUsd: response.usage?.cost };
+      if (!image?.b64_json) {
+        record({ output: null, usage });
+        throw new PermanentRunError("The model returned no image");
+      }
+      const mediaType = image.media_type?.startsWith("image/") ? image.media_type : "image/png";
+      // The image itself stays out of the trace; its size says enough.
+      record({ output: `[image: ${mediaType}, ${Math.floor(image.b64_json.length * 3 / 4)} bytes]`, usage });
+      return {
+        value: `data:${mediaType};base64,${image.b64_json}`,
+        usage: {
+          inputTokens: response.usage?.prompt_tokens,
+          outputTokens: response.usage?.completion_tokens,
+        },
+        raw: response,
+        request,
+      };
     });
-    const image = response.data?.[0];
-    if (!image?.b64_json) throw new PermanentRunError("The model returned no image");
-    const mediaType = image.media_type?.startsWith("image/") ? image.media_type : "image/png";
-    return {
-      value: `data:${mediaType};base64,${image.b64_json}`,
-      usage: {
-        inputTokens: response.usage?.prompt_tokens,
-        outputTokens: response.usage?.completion_tokens,
-      },
-      raw: response,
-      request,
-    };
   } catch (error) {
     if (error instanceof PermanentRunError && error.audit) throw error;
     const response = auditError(error);

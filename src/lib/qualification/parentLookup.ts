@@ -2,9 +2,8 @@ import type OpenAI from "openai";
 import { OPENROUTER_BASE_URL } from "@/lib/ai/server/openrouter";
 import { getOpenRouterRuntime } from "@/lib/ai/server/runtime";
 import { completeStructuredWithOpenRouter } from "@/lib/ai/server/structuredCompletion";
+import { getPrompt } from "@/lib/observability/langfuse";
 import type { QualificationDebugTrace } from "./types";
-
-const SYSTEM_PROMPT = "Identify the parent company domain for this e-commerce store. Use web search to research ownership, parent company, brand operator, and official company references before deciding. If it is independently owned or uncertain, return null. Submit the answer by calling the report_parent_domain function.";
 
 export async function resolveParentDomain(domain: string): Promise<string | null> {
   return (await resolveParentDomainWithDebug(domain)).parentDomain;
@@ -12,14 +11,15 @@ export async function resolveParentDomain(domain: string): Promise<string | null
 
 export async function resolveParentDomainWithDebug(domain: string): Promise<{ parentDomain: string | null; debug: NonNullable<QualificationDebugTrace["parentLookup"]> }> {
   const startedAt = new Date().toISOString();
-  let request = { provider: "openrouter" as const, endpoint: OPENROUTER_BASE_URL, model: "not-configured", instructions: SYSTEM_PROMPT, input: domain, maxOutputTokens: 2000, tool: "report_parent_domain", tools: [{ type: "web_search" as const }] };
+  const systemPrompt = await getPrompt("qualification/parent-domain-system");
+  let request = { provider: "openrouter" as const, endpoint: OPENROUTER_BASE_URL, model: "not-configured", instructions: systemPrompt.text, input: domain, maxOutputTokens: 2000, tool: "report_parent_domain", tools: [{ type: "web_search" as const }] };
   try {
     const runtime = await getOpenRouterRuntime();
     request = { ...request, model: runtime.selection.modelId };
     // OpenRouter's official `web` plugin grounds any compatible Chat Completions model.
     const result = await completeStructuredWithOpenRouter({
       timeoutMs: 60_000,
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: systemPrompt.text,
       userPrompt: domain,
       maxOutputTokens: 2000,
       jsonSchema: {
@@ -32,6 +32,7 @@ export async function resolveParentDomainWithDebug(domain: string): Promise<{ pa
       },
       schemaName: "report_parent_domain",
       plugins: [{ id: "web", max_results: 5 }],
+      trace: { name: "qualification-parent-domain", prompts: [systemPrompt], metadata: { domain } },
     });
     const raw = result.text;
     const parsed = JSON.parse(raw) as { parentDomain?: string | null };

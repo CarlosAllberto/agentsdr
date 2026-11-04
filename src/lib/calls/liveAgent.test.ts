@@ -123,8 +123,23 @@ describe("agentInstructions context", () => {
     expect(text).not.toContain("never quote a number");
     expect(text.indexOf("This is a phone call, not a text chat")).toBeLessThan(text.indexOf("<brief>"));
   });
-  test("history is included", () => {
-    expect(agentInstructions(base, [], { history: "<history>x</history>" })).toContain("<history>x</history>");
+  test("history is included, with the guidance for who rang whom", () => {
+    const text = agentInstructions(base, [], { history: { lines: "- 20 Oct 2026: we called them; they picked up", spokeBefore: true } });
+    expect(text).toContain("<history>\n- 20 Oct 2026: we called them; they picked up\n</history>");
+    expect(text).toContain("do not introduce yourself from scratch");
+    expect(agentInstructions(base, [], { inbound: true, history: { lines: "- x", spokeBefore: false } })).toContain("most likely after a missed call");
+    expect(agentInstructions(base, [], { history: { lines: "- x", spokeBefore: false } })).toContain("mention once that you tried before");
+    expect(agentInstructions(base, [], {})).not.toContain("<history>");
+  });
+  test("every goal says nothing else is sent; the link only when the campaign has one", () => {
+    for (const goal of ["book_meeting", "human_callback", "either"] as const) {
+      const text = agentInstructions(base, [], { goal: { goal, bookingUrl: null } });
+      expect(text).toContain("never say a meeting is confirmed");
+      expect(text).toContain("Never offer to send anything else");
+      expect(text).not.toContain("{{");
+    }
+    expect(agentInstructions(base, [], { goal: { goal: "book_meeting", bookingUrl: null } })).toContain("has no booking link");
+    expect(agentInstructions(base, [], { goal: { goal: "either", bookingUrl: "https://cal.com/x" } })).toContain("They would rather have a call from the team");
   });
   test("liveSetup records every outcome and whenAt", () => {
     const tool = liveSetup(base, [], {}).tools[0].functionDeclarations[0];

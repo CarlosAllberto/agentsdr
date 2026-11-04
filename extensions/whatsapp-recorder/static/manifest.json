@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AgentSDR Call Recorder",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "Places WhatsApp Web calls from AgentSDR, records them from pickup to hang-up (your microphone left, the lead right), and uploads them.",
   "icons": {
     "16": "icon-16.png",

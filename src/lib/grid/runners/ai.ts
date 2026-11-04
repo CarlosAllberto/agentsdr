@@ -4,6 +4,9 @@ import { getAiModel, getAiProvider, promptColumnKeys } from "@/lib/ai/catalog";
 import { getAiRunner } from "@/lib/ai/server/registry";
 import type { AiRunner } from "@/lib/ai/server/types";
 import type { AiModelDefinition } from "@/lib/ai/types";
+import { getPromptTemplate, type ResolvedPrompt } from "@/lib/observability/langfuse";
+import { PROMPTS } from "@/lib/prompts/registry";
+import { fillPrompt } from "@/lib/prompts/template";
 import type { AiConfig, CellResult, CellValues } from "../types";
 import { PermanentRunError, aiProviderLabel, interpolate, type ColumnRunner, type RunSession } from "./types";
 
@@ -11,6 +14,8 @@ type AiSession = RunSession & {
   credentials: Record<string, string>;
   model: AiModelDefinition;
   invoke: AiRunner;
+  /** grid/fill-row-field, resolved once per run. */
+  fieldPrompt: ResolvedPrompt;
 };
 
 /**
@@ -20,7 +25,10 @@ type AiSession = RunSession & {
  * optional field will sometimes omit it, and a silently missing key is much
  * harder for the user to debug than an empty string in the cell.
  */
-function schemaFor(config: AiConfig): Record<string, unknown> | null {
+export function schemaFor(
+  config: AiConfig,
+  fieldTemplate: string = PROMPTS["grid/fill-row-field"].template,
+): Record<string, unknown> | null {
   if (config.outputFormat === "json_schema") return config.jsonSchema ?? null;
   if (!config.outputs.length) return null;
 
@@ -36,9 +44,7 @@ function schemaFor(config: AiConfig): Record<string, unknown> | null {
           // string or number it answers "" or 0, and 0 employees reads as a
           // fact rather than as "not found".
           type: [field.type === "number" ? "number" : field.type === "boolean" ? "boolean" : "string", "null"],
-          description: [field.description, "null when it is not known or cannot be found; never guess."]
-            .filter(Boolean)
-            .join(" — "),
+          description: fillPrompt(fieldTemplate, { description: field.description }),
         },
       ]),
     ),
@@ -80,7 +86,7 @@ export const aiRunner: ColumnRunner<AiConfig> = {
       throw new PermanentRunError(`Reconnect the ${provider.name} account before running`);
     }
 
-    return { credentials, model, invoke };
+    return { credentials, model, invoke, fieldPrompt: await getPromptTemplate("grid/fill-row-field") };
   },
 
   async run(config, row, ctx, session): Promise<CellResult> {
@@ -94,7 +100,7 @@ export const aiRunner: ColumnRunner<AiConfig> = {
       return { value: "Skipped", outcome: "skipped", costCents: 0 };
     }
 
-    const schema = prepared.model.producesImages ? null : schemaFor(config);
+    const schema = prepared.model.producesImages ? null : schemaFor(config, prepared.fieldPrompt?.text);
     const started = Date.now();
 
     const result = await prepared.invoke({
@@ -109,6 +115,10 @@ export const aiRunner: ColumnRunner<AiConfig> = {
       })),
       timeoutMs: ctx.timeoutMs,
       signal: ctx.signal,
+      trace: {
+        metadata: { tableId: ctx.tableId, rowId: ctx.rowId, columnKey: ctx.columnKey },
+        prompts: schema && config.outputFormat !== "json_schema" && prepared.fieldPrompt ? [prepared.fieldPrompt] : [],
+      },
     });
 
     const latencyMs = Date.now() - started;

@@ -7,7 +7,7 @@ import { personCompanyName } from "@/lib/leads/companyName";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
 import { runInOrganization, inOrg } from "@/lib/tenancy/scope";
 import { matchPersonByPhone } from "@/lib/whatsapp/messages";
-import { composeAgentBrief } from "./aiCampaigns/brief";
+import { agentBrief } from "./aiCampaigns/brief.server";
 import { AI_OPEN_STATUSES, inboundStepKey } from "./aiCampaigns/contract";
 import { normalizePhone } from "./phone";
 import { organizationPhoneCountry } from "./phone.server";
@@ -85,7 +85,7 @@ async function decide(station: StationRow, { workerId, call }: WorkerIncomingCal
     .limit(1);
   const lead = found ? recorderLeadFor(found.person, personCompanyName(found.person.raw, found.companyName)) : null;
   const firstCall = contact?.campaign.aiSteps.find((step) => step.kind === "call");
-  const brief = composeAgentBrief({
+  const brief = await agentBrief({
     campaignInstructions: contact?.campaign.aiInstructions ?? "",
     purpose: "inbound",
     stepInstructions: firstCall?.kind === "call" ? firstCall.instructions : null,

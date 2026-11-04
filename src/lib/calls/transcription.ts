@@ -5,6 +5,9 @@ import { db } from "@/lib/db";
 import { companies, people } from "@/lib/leads/schema";
 import { getByokSettings } from "@/lib/ai/byok";
 import { getOpenRouterRuntime } from "@/lib/ai/server/runtime";
+import { getPromptTemplate, traceGeneration } from "@/lib/observability/langfuse";
+import { PROMPTS } from "@/lib/prompts/registry";
+import { fillPrompt } from "@/lib/prompts/template";
 import type { CallTranscript } from "./contract";
 import { callSessions } from "./schema";
 import { getRecordingBytes } from "./storage";
@@ -97,6 +100,7 @@ export function parseTranscriptResponse(value: unknown): ParsedTranscript | null
   return { language, summary: summary || "No summary was returned.", utterances: merged };
 }
 
+/** transcription/call, filled for one recording; `template` is the Langfuse version when the caller has it. */
 export function buildTranscriptionPrompt(input: {
   leadName: string | null;
   companyName: string | null;
@@ -104,26 +108,12 @@ export function buildTranscriptionPrompt(input: {
   recordingOffsetMs?: number | null;
   /** The lead called the rep's number (the AI agent answered for the rep). */
   inbound?: boolean;
-}): string {
-  const who = [input.leadName, input.companyName].filter(Boolean).join(", ");
-  const ringing = input.recordingOffsetMs && input.recordingOffsetMs >= 1000
-    ? `\n\nThe recording starts about ${Math.round(input.recordingOffsetMs / 1000)} seconds before the lead picks up: ignore the ringing before that, and any speech in it is the rep's.`
-    : "";
-  const shape = input.inbound
-    ? `placed by a lead${who ? ` (${who})` : ""} to a sales rep's number, and answered on the rep's side. The person who called is the lead and should be labeled "lead"; the one who answered is the rep and should be labeled "rep".`
-    : `placed by a sales rep to a lead${who ? ` (${who})` : ""}. The rep is the caller and should be labeled "rep"; the person who was called is the lead and should be labeled "lead".`;
-  return `This recording is a WhatsApp voice call — both sides of it — ${shape}
-
-Transcribe the call in whatever language was actually spoken — Hindi, English, or a mix of both (Hinglish). Keep Hinglish as spoken; write Hindi words in Latin script if that's how they were said, don't translate them. Do not translate anything to English in the transcript itself.
-
-For every distinct thing said:
-- attribute it to "rep" or "lead" by who is speaking (role and voice, not word content)
-- give "startSeconds" as a number of seconds from the very start of the recording
-- merge consecutive fragments from the same speaker into one utterance rather than splitting a single thought
-
-Then write a 2-3 sentence summary IN ENGLISH of the call, including any next step the two of them agreed to (a callback time, a meeting, information to be sent, etc.) — write "No next step was agreed." if none was.
-
-Report the language you transcribed in as a short code ("en", "hi", "hi-en" for a Hindi/English mix), your summary, and the utterances.${ringing}`;
+}, template: string = PROMPTS["transcription/call"].template): string {
+  return fillPrompt(template, {
+    who: [input.leadName, input.companyName].filter(Boolean).join(", "),
+    inbound: Boolean(input.inbound),
+    ringing_seconds: input.recordingOffsetMs && input.recordingOffsetMs >= 1000 ? Math.round(input.recordingOffsetMs / 1000) : null,
+  });
 }
 
 const TRANSCRIPT_JSON_SCHEMA = {
@@ -169,6 +159,7 @@ async function requestTranscript(row: CallSessionRow): Promise<CallTranscript> {
     leadName: lead?.fullName ?? lead?.firstName ?? null,
     companyName: lead?.companyName ?? null,
     inbound: row.direction === "inbound",
+    callId: row.id,
   });
 }
 
@@ -184,6 +175,8 @@ export async function transcribeAudio(input: {
   leadName: string | null;
   companyName: string | null;
   inbound?: boolean;
+  /** Groups the trace with the call's other traces in Langfuse. */
+  callId?: string;
 }): Promise<CallTranscript> {
   const selected = (await getByokSettings()).transcriptionModel;
   if (!selected) {
@@ -194,41 +187,60 @@ export async function transcribeAudio(input: {
   const format = audioFormatFor(input.contentType);
 
   const runtime = await getOpenRouterRuntime({ provider, modelId: model }, TRANSCRIPTION_TIMEOUT_MS);
-  const response = await runtime.client.chat.completions.create(
-    {
-      model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: buildTranscriptionPrompt({
-                leadName: input.leadName,
-                companyName: input.companyName,
-                recordingOffsetMs: input.recordingOffsetMs,
-                inbound: input.inbound,
-              }) },
-            { type: "input_audio", input_audio: { data: base64, format } },
-          ],
-        },
-      ],
-      response_format: { type: "json_schema", json_schema: { name: "call_transcript", strict: true, schema: TRANSCRIPT_JSON_SCHEMA } },
-      provider: runtime.provider,
-      temperature: 0,
-    } as never,
-    {},
-  ) as { choices?: Array<{ message?: { content?: string | null } }> };
+  const prompt = await getPromptTemplate("transcription/call");
+  const text = buildTranscriptionPrompt({
+    leadName: input.leadName,
+    companyName: input.companyName,
+    recordingOffsetMs: input.recordingOffsetMs,
+    inbound: input.inbound,
+  }, prompt.text);
+  return traceGeneration({
+    name: "call-transcription",
+    model,
+    // The recording stays out of the trace; its size and format say enough.
+    input: [{ role: "user", content: [{ type: "text", text }, { type: "input_audio", input_audio: `[audio: ${input.audio.byteLength} bytes, ${format}]` }] }],
+    prompts: [prompt],
+    modelParameters: { temperature: 0 },
+    metadata: { provider, inbound: Boolean(input.inbound), ...(input.callId ? { callId: input.callId } : {}) },
+    sessionId: input.callId,
+  }, async (record) => {
+    const response = await runtime.client.chat.completions.create(
+      {
+        model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text },
+              { type: "input_audio", input_audio: { data: base64, format } },
+            ],
+          },
+        ],
+        response_format: { type: "json_schema", json_schema: { name: "call_transcript", strict: true, schema: TRANSCRIPT_JSON_SCHEMA } },
+        provider: runtime.provider,
+        temperature: 0,
+      } as never,
+      {},
+    ) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+    };
 
-  const text = response.choices?.[0]?.message?.content;
-  if (!text) throw new Error("The model returned no transcript content");
-  let json: unknown;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error("The model's response was not valid JSON");
-  }
-  const parsed = parseTranscriptResponse(json);
-  if (!parsed) throw new Error("The model's transcript had no valid utterances");
-  return { ...parsed, model: `${provider}/${model}` };
+    const content = response.choices?.[0]?.message?.content;
+    const usage = { input: response.usage?.prompt_tokens, output: response.usage?.completion_tokens, costUsd: response.usage?.cost };
+    record({ output: content ?? null, usage });
+    if (!content) throw new Error("The model returned no transcript content");
+    let json: unknown;
+    try {
+      json = JSON.parse(content);
+    } catch {
+      throw new Error("The model's response was not valid JSON");
+    }
+    record({ output: json, usage });
+    const parsed = parseTranscriptResponse(json);
+    if (!parsed) throw new Error("The model's transcript had no valid utterances");
+    return { ...parsed, model: `${provider}/${model}` };
+  });
 }
 
 // --- orchestration ------------------------------------------------------

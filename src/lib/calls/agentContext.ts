@@ -20,8 +20,8 @@ import { callCampaignContacts, callCampaigns, callSessions, type CallDirection }
 export type AgentPromptContext = {
   /** "Tuesday, 27 October 2026, 14:35 (GMT+05:30) in Asia/Kolkata" */
   now?: string | null;
-  /** The ready-made <history> section, or null for a stranger. */
-  history?: string | null;
+  /** Earlier calls and messages with this person, as lines (the wording around them is the prompt's); null for a stranger. */
+  history?: { lines: string; spokeBefore: boolean } | null;
   /** Set for a call placed by an AI campaign; replaces the generic "Booking a next step". */
   goal?: { goal: AiCampaignGoal; bookingUrl: string | null } | null;
   /** The organization's calling instructions (Settings → Instructions → Calling); null = the defaults. */
@@ -77,8 +77,8 @@ export type PreviousCall = {
 };
 export type PreviousMessage = { at: Date; direction: "inbound" | "outbound"; body: string };
 
-/** The <history> section, newest call first; null when there is nothing to say. */
-export function formatHistory(calls: PreviousCall[], messages: PreviousMessage[], timeZone: string, inbound = false): string | null {
+/** What went before, as lines for the prompt's <history>, newest call first; null when there is nothing to say. */
+export function formatHistory(calls: PreviousCall[], messages: PreviousMessage[], timeZone: string): { lines: string; spokeBefore: boolean } | null {
   if (!calls.length && !messages.length) return null;
   const zone = safeZone(timeZone);
   const day = (at: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, day: "numeric", month: "short", year: "numeric" }).format(at);
@@ -108,56 +108,24 @@ export function formatHistory(calls: PreviousCall[], messages: PreviousMessage[]
       lines.push(`- ${day(message.at)}, ${message.direction === "inbound" ? "they wrote" : "we wrote"}: ${text.length > MESSAGE_CHARS ? `${text.slice(0, MESSAGE_CHARS)} …` : text}`);
     }
   }
-  const spoke = calls.some((call) => call.status === "recorded");
-  return [
-    "What happened with this person before:",
-    "<history>",
-    ...lines,
-    "</history>",
-    inbound
-      ? spoke
-        ? "They are calling you back after talking with you before: refer to what was said, and do not introduce yourself from scratch."
-        : "They are calling you back, most likely after a missed call or a message from you: thank them, and carry on as a first conversation."
-      : spoke
-        ? "You have spoken with them before: do not introduce yourself from scratch. Say you are calling back or following up and refer to what was said."
-        : "Earlier calls went unanswered: you may mention once that you tried before, briefly, and carry on as a first conversation.",
-    "Use this to be natural, never to recite it.",
-  ].join("\n");
+  return { lines: lines.join("\n"), spokeBefore: calls.some((call) => call.status === "recorded") };
 }
 
 /**
- * What the calling system will actually do after this call, by how it ends:
- * the only things the agent may offer. Facts, not style — how it proposes them
- * is the calling instructions'. It promised WhatsApp "details" nothing could
- * send, and a booking link a campaign without one never sent (4 Nov 2026).
+ * The prompt's "what happens after this call" choices for the campaign goal
+ * (calls/agent-system): what the system will actually do, so the agent offers
+ * nothing else. It promised WhatsApp "details" nothing could send, and a
+ * booking link a campaign without one never sent (4 Nov 2026).
  */
-export function afterCallFacts(goal: AgentPromptContext["goal"]): string[] {
-  const always = [
-    "- A bad moment: the system calls them back at the time they give. Record call_back with whenAt; if they give no time, ask for a rough one.",
-    "- They ask never to be contacted again: nobody contacts them again. Record do_not_contact.",
-    "- You cannot see a calendar. A day or time they name is their preference: never say a meeting is confirmed or booked.",
-    "- Nothing else is sent: no documents, decks, overviews or other messages. Never offer to send anything else.",
-  ];
-  if (!goal) {
-    return [
-      "What happens after this call (the only things you can offer):",
-      "- They want to talk further: the team contacts them at the day and time you agree. Record meeting_booked or human_callback with whenAt.",
-      ...always,
-    ];
-  }
-  const link = goal.bookingUrl?.trim()
-    ? "the system sends them a WhatsApp message right after the call with a link to pick a time. Record meeting_booked (with whenAt if they named a time)."
-    : "the team contacts them to set it up (this campaign has no booking link to send). Record meeting_booked (with whenAt if they named a time).";
-  const team = "a person from the team calls them at the day and time you agree. Record human_callback with whenAt.";
-  return [
-    "What happens after this call (the only things you can offer):",
-    ...(goal.goal === "book_meeting"
-      ? [`- They agree to a meeting with the team: ${link}`]
-      : goal.goal === "human_callback"
-        ? [`- They want to talk further: ${team}`]
-        : [`- They agree to a meeting: ${link}`, `- They would rather have a call from the team: ${team}`]),
-    ...always,
-  ];
+export function goalVariables(goal: AgentPromptContext["goal"]) {
+  return {
+    has_goal: !!goal,
+    goal_book_meeting: goal?.goal === "book_meeting",
+    goal_either: goal?.goal === "either",
+    offer_meeting: goal?.goal === "book_meeting" || goal?.goal === "either",
+    offer_team_call: goal?.goal === "human_callback" || goal?.goal === "either",
+    booking_link: !!goal?.bookingUrl?.trim(),
+  };
 }
 
 type SessionRow = { id: string; personId: string; campaignContactId: string | null; createdAt: Date; direction?: CallDirection };
@@ -232,7 +200,7 @@ export async function loadAgentContext(row: SessionRow): Promise<AgentPromptCont
   ]);
   return {
     now: formatNow(new Date(), timeZone),
-    history: formatHistory(calls, messages.reverse(), timeZone, row.direction === "inbound"),
+    history: formatHistory(calls, messages.reverse(), timeZone),
     goal,
     callingInstructions,
     inbound: row.direction === "inbound",

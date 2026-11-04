@@ -8,6 +8,8 @@ import type {
   ClassifyCrmReplyInput,
   CurrentClassification,
 } from "@/lib/crm/ai/types";
+import { PROMPTS } from "@/lib/prompts/registry";
+import { fillPrompt } from "@/lib/prompts/template";
 import { LEAD_STAGE_CATEGORIES, type CallTranscript, type LeadStageCategory } from "./contract";
 
 /**
@@ -72,22 +74,19 @@ export function pickRepresentativeRecord<T extends { isDefaultPipeline: boolean;
   return best;
 }
 
-/** The transcript as plain text the reply classifier can read as "the lead's message". */
+/**
+ * The transcript as plain text the reply classifier can read as "the lead's
+ * message": crm/classify-call-transcript, filled with the summary and the
+ * Rep/Lead lines.
+ */
 export function formatTranscriptForClassification(
   transcript: Pick<CallTranscript, "summary" | "utterances">,
+  template: string = PROMPTS["crm/classify-call-transcript"].template,
 ): string {
   const lines = transcript.utterances.map(
     (utterance) => `${utterance.speaker === "rep" ? "Rep" : "Lead"}: ${utterance.text.trim()}`,
   );
-  return [
-    "This is a transcript of a WhatsApp voice call a sales rep (\"Rep\") placed to the lead (\"Lead\"), not a written reply.",
-    "Classify the lead's intent from what the lead said; the rep's lines are context only.",
-    "",
-    `Summary: ${transcript.summary.trim()}`,
-    "",
-    "Transcript:",
-    ...lines,
-  ].join("\n");
+  return fillPrompt(template, { summary: transcript.summary.trim(), transcript: lines.join("\n") });
 }
 
 /**
@@ -108,6 +107,8 @@ export function buildCallClassificationInput(input: {
   knowledge: readonly ClassificationKnowledgeDocument[];
   policy: ClassificationPolicy;
   instructions?: string | null;
+  /** crm/classify-call-transcript from Langfuse; the copy in code otherwise. */
+  transcriptTemplate?: string;
 }): ClassifyCrmReplyInput {
   const message = {
     id: input.callId,
@@ -115,7 +116,7 @@ export function buildCallClassificationInput(input: {
     direction: "inbound" as const,
     sentAt: input.occurredAt,
     subject: "WhatsApp call transcript",
-    bodyText: formatTranscriptForClassification(input.transcript),
+    bodyText: formatTranscriptForClassification(input.transcript, input.transcriptTemplate),
   };
   return {
     categories: input.categories,

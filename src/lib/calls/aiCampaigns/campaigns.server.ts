@@ -26,7 +26,7 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { parseAgentName, parseAgentVoice } from "@/lib/calls/liveAgent";
 import { AGENT_OUTCOMES, type AgentOutcomeKind, type CallCampaignStatus } from "@/lib/calls/contract";
 import { CallApiError, expireStaleCalls, startCall } from "@/lib/calls/sessions";
-import { composeAgentBrief } from "./brief";
+import { agentBrief } from "./brief.server";
 import { callCampaignContacts, callCampaignStations, callCampaignStepRuns, callCampaigns, callSessions, callingStations } from "@/lib/calls/schema";
 import {
   AI_CONTACT_STATUSES,
@@ -1107,7 +1107,7 @@ export async function callAiLeadNow(campaignId: string, contactId: string, reque
     campaignContactId: contact.id,
     mode: "agent_cloud",
     stationId: station.id,
-    agentBrief: composeAgentBrief({
+    agentBrief: await agentBrief({
       campaignInstructions: campaign.aiInstructions,
       purpose: "reach",
       stepInstructions: firstCall?.kind === "call" ? firstCall.instructions : null,
