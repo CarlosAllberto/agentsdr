@@ -108,6 +108,14 @@ export type AiCampaignLead = {
   /** "Call 2 of 4", "Message 1 of 2 (follow-up)": the step it is on, or null once it is done. */
   currentStep: string | null;
   nextAt: string | null;
+  /**
+   * When it reaches (or reached) the CRM's Action required: a hand-off, a yes
+   * that has not booked (a day after the link), a meeting to prepare (a day
+   * before it). Null when nothing is due for a person.
+   */
+  actionRequiredAt: string | null;
+  /** The booked meeting's start, while booked. */
+  meetingAt: string | null;
   lastOutcome: { outcome: AgentOutcomeKind; summary: string | null; at: string } | null;
   calls: number;
   numberName: string | null;

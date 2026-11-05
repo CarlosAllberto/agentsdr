@@ -12,8 +12,10 @@ import "server-only";
  *
  * A booking finds its lead by the booking code the link put in the booking's
  * metadata (or, for a link sent before codes, the contact id), else by the
- * attendee's email or phone among the organization's open AI leads. Created / rescheduled → `booked`, with the meeting time as
- * the lead's follow-up; cancelled → back to `chasing` where it was.
+ * attendee's email or phone among the organization's open AI leads.
+ * Created / rescheduled → `booked` (ai_meeting_at), in Action required a day
+ * before the meeting (meetingPrepAt); cancelled → back to `chasing` where it
+ * was, in Action required a day later unless they book again.
  */
 import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -25,7 +27,7 @@ import { normalizePhone } from "../phone";
 import { organizationPhoneCountry } from "../phone.server";
 import { callCampaignContacts, callCampaigns } from "../schema";
 import { AI_OPEN_STATUSES, type AiContactStatus } from "./contract";
-import { calcomSignatureValid, parseCalcomEvent, type CalcomBookingEvent } from "./engineRules";
+import { BOOKING_REVIEW_MS, calcomSignatureValid, meetingPrepAt, parseCalcomEvent, type CalcomBookingEvent } from "./engineRules";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** After a cancellation, the chase resumes after this. */
@@ -69,7 +71,7 @@ export async function handleCalcomWebhook(request: Request): Promise<Response> {
   });
 }
 
-type MatchedContact = { id: string; personId: string; aiStep: number; followUpAt: Date | null; chaseSteps: (typeof callCampaigns.$inferSelect)["aiChaseSteps"] };
+type MatchedContact = { id: string; personId: string; aiStep: number; meetingAt: Date | null; chaseSteps: (typeof callCampaigns.$inferSelect)["aiChaseSteps"] };
 
 /** The leads a booking names: by its metadata booking code or contact id, else by the attendee's email or phone among `statuses`. */
 async function matchContacts(
@@ -81,7 +83,7 @@ async function matchContacts(
     id: callCampaignContacts.id,
     personId: callCampaignContacts.personId,
     aiStep: callCampaignContacts.aiStep,
-    followUpAt: callCampaignContacts.followUpAt,
+    meetingAt: callCampaignContacts.aiMeetingAt,
     chaseSteps: callCampaigns.aiChaseSteps,
   };
   const aiCampaign = and(inOrg(callCampaigns), eq(callCampaigns.runBy, "ai"));
@@ -118,7 +120,7 @@ async function syncFollowUps(personIds: string[]): Promise<void> {
   for (const personId of new Set(personIds)) await syncCallFollowUpSafely(personId);
 }
 
-/** A booking (or a new time): booked, the meeting as their follow-up. Any lead the link named except one stopped. */
+/** A booking (or a new time): booked, in Action required a day before the meeting. Any lead the link named except one stopped. */
 async function markBooked(event: CalcomBookingEvent): Promise<string[]> {
   const byIdStatuses: AiContactStatus[] = ["queued", "reaching", "callback", "chasing", "booked", "handoff", "not_interested", "unreached", "replied", "failed"];
   const matched = await matchContacts(event, [...AI_OPEN_STATUSES, "booked"], byIdStatuses);
@@ -133,7 +135,8 @@ async function markBooked(event: CalcomBookingEvent): Promise<string[]> {
       aiFailures: 0,
       aiNote: "Meeting booked",
       stage: "follow_up",
-      followUpAt: event.startTime ?? now,
+      aiMeetingAt: event.startTime,
+      followUpAt: meetingPrepAt(event.startTime, now),
       updatedAt: now,
     })
     .where(and(contactInScope(), inArray(callCampaignContacts.id, matched.map((c) => c.id)), ne(callCampaignContacts.aiStatus, "stopped")))
@@ -149,7 +152,7 @@ async function markBooked(event: CalcomBookingEvent): Promise<string[]> {
  */
 async function markCancelled(event: CalcomBookingEvent): Promise<string[]> {
   const matched = (await matchContacts(event, ["booked"], ["booked"])).filter(
-    (contact) => !event.startTime || !contact.followUpAt || contact.followUpAt.getTime() === event.startTime.getTime(),
+    (contact) => !event.startTime || !contact.meetingAt || contact.meetingAt.getTime() === event.startTime.getTime(),
   );
   const changed: { id: string; personId: string }[] = [];
   const now = new Date();
@@ -159,8 +162,16 @@ async function markCancelled(event: CalcomBookingEvent): Promise<string[]> {
       .update(callCampaignContacts)
       .set(
         resume
-          ? { aiStatus: "chasing", aiNextAt: new Date(now.getTime() + RESUME_AFTER_CANCEL_MS), aiNote: "Cancelled the meeting", stage: "to_call", followUpAt: null, updatedAt: now }
-          : { aiStatus: "handoff", aiNextAt: null, aiNote: "Cancelled the meeting", stage: "follow_up", followUpAt: now, updatedAt: now },
+          ? {
+              aiStatus: "chasing",
+              aiNextAt: new Date(now.getTime() + RESUME_AFTER_CANCEL_MS),
+              aiNote: "Cancelled the meeting",
+              aiMeetingAt: null,
+              stage: "follow_up",
+              followUpAt: new Date(now.getTime() + BOOKING_REVIEW_MS),
+              updatedAt: now,
+            }
+          : { aiStatus: "handoff", aiNextAt: null, aiNote: "Cancelled the meeting", aiMeetingAt: null, stage: "follow_up", followUpAt: now, updatedAt: now },
       )
       .where(and(contactInScope(), eq(callCampaignContacts.id, contact.id), eq(callCampaignContacts.aiStatus, "booked")))
       .returning({ id: callCampaignContacts.id, personId: callCampaignContacts.personId });

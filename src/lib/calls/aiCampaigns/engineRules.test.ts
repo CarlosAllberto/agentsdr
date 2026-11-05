@@ -6,6 +6,7 @@ import type { AiCampaignStep } from "./contract";
 import {
   afterCall,
   afterMessage,
+  BOOKING_REVIEW_MS,
   bookingLinkFor,
   calcomSignatureValid,
   newBookingCode,
@@ -14,6 +15,7 @@ import {
   CHASE_GRACE_MS,
   dailyCallLimit,
   ERROR_RETRY_MS,
+  meetingPrepAt,
   MIN_STEP_GAP_MS,
   parseCalcomEvent,
   plannedAction,
@@ -51,6 +53,7 @@ const contact = (overrides: Partial<AiEngineContact> = {}): AiEngineContact => (
   callbacks: 0,
   failures: 0,
   bookingLinkSent: false,
+  reviewAt: null,
   ...overrides,
 });
 const outcome = (kind: AgentOutcomeKind, extra: Partial<AgentOutcome> = {}): AgentOutcome => ({
@@ -344,6 +347,31 @@ describe("withinCallingHours", () => {
     expect(withinCallingHours(hours, new Date("2026-10-27T08:00:00Z"))).toBe(true); // Tue 13:30 IST
     expect(withinCallingHours(hours, new Date("2026-10-27T04:00:00Z"))).toBe(false); // Tue 09:30 IST
     expect(withinCallingHours(hours, new Date("2026-10-25T08:00:00Z"))).toBe(false); // Sunday
+  });
+});
+
+describe("Action required for a yes that has not booked", () => {
+  test("a yes reaches Action required a day after the link, and the chase keeps that time", () => {
+    const yes = afterCall(contact(), "conversation", outcome("meeting_booked"), campaign(), NOW);
+    expect(yes).toMatchObject({ status: "chasing", sendBookingLink: true, reviewAt: at(BOOKING_REVIEW_MS) });
+
+    const review = at(BOOKING_REVIEW_MS);
+    const linkSent = afterMessage(contact({ status: "chasing", reviewAt: review }), true, campaign(), at(HOUR), { bookingLink: true });
+    expect(linkSent).toMatchObject({ status: "chasing", step: 0, reviewAt: review });
+    expect(afterMessage(contact({ status: "chasing", step: 0, reviewAt: review }), true, campaign(), at(30 * HOUR))).toMatchObject({ step: 1, reviewAt: review });
+    expect(afterCall(contact({ status: "chasing", step: 0, reviewAt: review }), "error", null, campaign(), NOW, "offline")).toMatchObject({ status: "chasing", reviewAt: review });
+  });
+
+  test("a second yes after the link keeps the first review time, or sets one", () => {
+    const review = at(-2 * HOUR);
+    expect(afterCall(contact({ status: "reaching", step: 1, bookingLinkSent: true, reviewAt: review }), "conversation", outcome("interested"), campaign(), NOW)).toMatchObject({ status: "chasing", reviewAt: review });
+    expect(afterCall(contact({ status: "reaching", step: 1, bookingLinkSent: true }), "conversation", outcome("interested"), campaign(), NOW)).toMatchObject({ status: "chasing", reviewAt: at(BOOKING_REVIEW_MS) });
+  });
+
+  test("a booked meeting reaches Action required a day before, or now when it is sooner", () => {
+    expect(meetingPrepAt(at(72 * HOUR), NOW)).toEqual(at(48 * HOUR));
+    expect(meetingPrepAt(at(3 * HOUR), NOW)).toEqual(NOW);
+    expect(meetingPrepAt(null, NOW)).toEqual(NOW);
   });
 });
 

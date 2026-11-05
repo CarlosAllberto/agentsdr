@@ -171,18 +171,21 @@ function engineContact(contact: ContactRow, linkSent: boolean): AiEngineContact 
     callbacks: contact.aiCallbacks,
     failures: contact.aiFailures,
     bookingLinkSent: linkSent,
+    reviewAt: contact.aiStatus === "chasing" ? contact.followUpAt : null,
   };
 }
 
 /**
  * Writes a decision onto the lead, only while it is still open (a reply, a
  * booking or a person's stop that landed meanwhile wins). The calling
- * campaign's own stage and follow-up follow it: a hand-off is a follow-up
- * for a person (the CRM's Action required, once synced), an open lead is
- * still to call, anything else is done.
+ * campaign's own stage and follow-up follow it: a hand-off, and a chased
+ * lead's review time, are a follow-up for a person (the CRM's Action
+ * required, once synced and due), an open lead is still to call, anything
+ * else is done.
  */
 async function writeDecision(executor: Pick<typeof db, "update">, contactId: string, decision: AiDecision, now: Date): Promise<boolean> {
   const open = isOpenAiStatus(decision.status);
+  const followUpAt = decision.handoff?.followUpAt ?? (decision.status === "chasing" ? decision.reviewAt ?? null : null);
   const rows = await executor
     .update(callCampaignContacts)
     .set({
@@ -192,8 +195,8 @@ async function writeDecision(executor: Pick<typeof db, "update">, contactId: str
       aiCallbacks: decision.callbacks,
       aiFailures: decision.failures,
       ...(decision.note !== undefined ? { aiNote: decision.note } : {}),
-      stage: decision.handoff ? "follow_up" : open ? "to_call" : "done",
-      followUpAt: decision.handoff?.followUpAt ?? null,
+      stage: followUpAt ? "follow_up" : open ? "to_call" : "done",
+      followUpAt,
       updatedAt: now,
     })
     .where(and(contactInScope(), eq(callCampaignContacts.id, contactId), inArray(callCampaignContacts.aiStatus, [...AI_OPEN_STATUSES])))

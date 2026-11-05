@@ -32,7 +32,7 @@ import { aiLeadsEndpoint, aiLeadsUploadEndpoint, listAiLeads, updateAiLead } fro
 import { AI_CONTACT_STATUSES, AI_CONTACT_STATUS_LABELS, AI_OPEN_STATUSES, type AiContactStatus } from "@/lib/calls/aiCampaigns/contract";
 import { cn } from "@/utils/cn";
 import { AiLeadDrawer } from "./AiLeadDrawer";
-import { AiStatusBadge, errorText } from "./aiShared";
+import { actionRequiredText, AiStatusBadge, errorText, formatWhen } from "./aiShared";
 
 const PAGE_SIZE = 25;
 const ALL = "all";
@@ -209,6 +209,8 @@ export function AiLeadsTab({
                       <Table.Cell className="px-4">
                         <AiStatusBadge status={lead.status} />
                         {lead.note && <p className="mt-1 line-clamp-2 text-paragraph-xs text-text-sub-600" title={lead.note}>{lead.note}</p>}
+                        {lead.meetingAt && <p className="mt-0.5 text-paragraph-xs text-text-sub-600" suppressHydrationWarning>Meeting {formatWhen(lead.meetingAt)}</p>}
+                        {lead.actionRequiredAt && <p className="mt-0.5 text-paragraph-xs text-text-sub-600" suppressHydrationWarning>{actionRequiredText(lead.actionRequiredAt)}</p>}
                       </Table.Cell>
                       <Table.Cell className="px-4 text-paragraph-sm text-text-sub-600">{lead.currentStep ?? "—"}</Table.Cell>
                       <Table.Cell className="px-4 text-paragraph-sm text-text-sub-600" suppressHydrationWarning>{open ? (lead.nextAt ? relativeTime(lead.nextAt) : "Waiting for a number") : "—"}</Table.Cell>

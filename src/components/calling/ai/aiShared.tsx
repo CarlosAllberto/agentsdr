@@ -155,6 +155,12 @@ export function formatWhen(iso: string | null): string {
   return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/** "Action required from Nov 6, 1:13 PM", or "In Action required since …" once due. */
+export function actionRequiredText(iso: string): string {
+  const due = new Date(iso).getTime() <= Date.now();
+  return `${due ? "In Action required since" : "Action required from"} ${formatWhen(iso)}`;
+}
+
 export function formatCallLength(ms: number | null): string | null {
   if (!ms || ms < 1000) return null;
   const seconds = Math.round(ms / 1000);

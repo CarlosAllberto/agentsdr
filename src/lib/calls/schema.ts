@@ -266,6 +266,8 @@ export const callCampaignContacts = pgTable(
     /** Why it stopped or failed, or the last error, for the person reading the list. */
     aiNote: text("ai_note"),
     aiBookedAt: timestamp("ai_booked_at", { withTimezone: true }),
+    /** The booked meeting's start, from Cal.com; null when none is booked. scripts/add-ai-meeting-at.ts. */
+    aiMeetingAt: timestamp("ai_meeting_at", { withTimezone: true }),
     /**
      * The short code its booking link carries (`metadata[c]`), given when a link
      * is first sent; unique across organizations. scripts/add-ai-booking-code.ts.

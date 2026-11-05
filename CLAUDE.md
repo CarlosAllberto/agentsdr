@@ -519,7 +519,13 @@ open AI leads to `replied`. Cal.com (platform integration `calcom`; webhook
 sent), and nothing else about the person, since a link may be forwarded.
 Links sent before codes carry `metadata[agentsdrContact]=<contact id>` and
 still match; a booking without either falls back to the attendee's email or
-phone.
+phone. A yes reaches the CRM's Action required on a clock of its own, not
+through the chase (so a draft campaign's leads get there too): a day after
+the booking link (`BOOKING_REVIEW_MS`, kept through the chase), a day before
+a booked meeting (`ai_meeting_at`, `meetingPrepAt`), a day after a
+cancellation. That time is the lead's `follow_up_at` (stage `follow_up`),
+which `syncCallFollowUp` mirrors onto the CRM record, and the lead list shows
+it ("Action required from …").
 
 Instructions come in layers: a short fixed part in `liveAgent.ts` (it is a
 live cold phone call — one voice, short turns, wait for answers; who the

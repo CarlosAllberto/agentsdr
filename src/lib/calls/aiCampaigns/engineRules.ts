@@ -42,6 +42,14 @@ export const CALLBACK_MIN_MS = 15 * MINUTE_MS;
 export const OUTCOME_GRACE_MS = 90_000;
 /** After the last chase message, how long they get to book before a person takes over. */
 export const CHASE_GRACE_MS = 24 * HOUR_MS;
+/**
+ * A lead who said yes reaches Action required this long after the booking
+ * link went out (or after they cancel) unless they book, whether or not the
+ * chase is still running: a person can nudge while it is warm.
+ */
+export const BOOKING_REVIEW_MS = 24 * HOUR_MS;
+/** A booked meeting reaches Action required this long before it starts, to prepare. */
+export const MEETING_PREP_MS = 24 * HOUR_MS;
 /** Warm-up: calls a day in a number's first week, then this much more each week. */
 export const WARMUP_CALLS_PER_WEEK = 10;
 
@@ -67,6 +75,8 @@ export type AiEngineContact = {
   failures: number;
   /** The booking link went out (a step run `booking-link` exists): they said yes once. */
   bookingLinkSent: boolean;
+  /** While chasing: when it reaches Action required unless they book (BOOKING_REVIEW_MS). */
+  reviewAt: Date | null;
 };
 
 /** What happens to a lead; the engine writes it onto call_campaign_contacts and runs the side effects. */
@@ -81,6 +91,8 @@ export type AiDecision = {
   note?: string | null;
   /** A person takes it from here: follow-up on the CRM record, due then. */
   handoff?: { followUpAt: Date };
+  /** Chasing: when a person sees it in Action required if they still have not booked. The chase goes on meanwhile. */
+  reviewAt?: Date | null;
   /** They asked not to be contacted: set Do Not Contact on the Person. */
   doNotContact?: boolean;
   /** Send the booking link now (step key `booking-link`). */
@@ -145,7 +157,15 @@ function dueAfter(step: AiCampaignStep, from: Date): Date {
 function stepAt(contact: AiEngineContact, status: "reaching" | "chasing", steps: readonly AiCampaignStep[], index: number, from: Date): AiDecision | null {
   const step = steps[index];
   if (!step) return null;
-  return { status, step: index, nextAt: dueAfter(step, from), callbacks: contact.callbacks, failures: 0, note: null };
+  return {
+    status,
+    step: index,
+    nextAt: dueAfter(step, from),
+    callbacks: contact.callbacks,
+    failures: 0,
+    note: null,
+    ...(status === "chasing" ? { reviewAt: contact.reviewAt ?? new Date(from.getTime() + BOOKING_REVIEW_MS) } : {}),
+  };
 }
 
 /** Where an unanswered step (or a sent message) leaves them: the next step of their sequence. */
@@ -174,6 +194,7 @@ function afterError(contact: AiEngineContact, now: Date, error: string | null): 
     callbacks: contact.callbacks,
     failures,
     note: message,
+    ...(contact.status === "chasing" ? { reviewAt: contact.reviewAt } : {}),
   };
 }
 
@@ -244,6 +265,7 @@ export function afterCall(
         callbacks: contact.callbacks,
         failures: 0,
         note: "Agreed to a meeting; sending the booking link",
+        reviewAt: new Date(now.getTime() + BOOKING_REVIEW_MS),
         sendBookingLink: true,
       };
     }
@@ -289,7 +311,15 @@ export function afterMessage(
     if (!sent) return handoff(contact, now, `The booking link could not be sent: ${options.error?.trim() || "unknown error"}`);
     const first = campaign.chaseSteps[0];
     if (!first) return handoff(contact, new Date(now.getTime() + CHASE_GRACE_MS), "Booking link sent; no follow-ups set");
-    return { status: "chasing", step: 0, nextAt: dueAfter(first, now), callbacks: contact.callbacks, failures: 0, note: "Booking link sent" };
+    return {
+      status: "chasing",
+      step: 0,
+      nextAt: dueAfter(first, now),
+      callbacks: contact.callbacks,
+      failures: 0,
+      note: "Booking link sent",
+      reviewAt: contact.reviewAt ?? new Date(now.getTime() + BOOKING_REVIEW_MS),
+    };
   }
   if (!sent) return afterError(contact, now, options.error ?? null);
   return advance(contact, campaign, now, true);
@@ -298,6 +328,12 @@ export function afterMessage(
 /** Starting a step moves a queued lead into the reach sequence. */
 export function statusWhenStarted(status: AiContactStatus): AiContactStatus {
   return status === "queued" ? "reaching" : status;
+}
+
+/** When a booked meeting reaches Action required: a day before it, or now if it is sooner. */
+export function meetingPrepAt(startTime: Date | null, now: Date): Date {
+  if (!startTime) return now;
+  return new Date(Math.max(now.getTime(), startTime.getTime() - MEETING_PREP_MS));
 }
 
 // --- what a finished call amounted to ----------------------------------------------

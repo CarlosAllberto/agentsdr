@@ -28,7 +28,7 @@ import { callAiLead, getAiLead, updateAiLead } from "@/lib/calls/aiCampaigns/cli
 import { getCall } from "@/lib/calls/client";
 import type { CallDetail } from "@/lib/calls/contract";
 import { cn } from "@/utils/cn";
-import { AiStatusBadge, errorText, formatCallLength, formatWhen } from "./aiShared";
+import { actionRequiredText, AiStatusBadge, errorText, formatCallLength, formatWhen } from "./aiShared";
 
 /** While a call is queued or on, the sheet refreshes this often. */
 const LIVE_REFRESH_MS = 5_000;
@@ -237,6 +237,8 @@ export function AiLeadDrawer({
                 </div>
                 {lead.nextAt && <p className="text-paragraph-sm text-text-sub-600" suppressHydrationWarning>Next action {formatWhen(lead.nextAt)}</p>}
                 {lead.note && <p className="text-paragraph-sm text-text-sub-600">{lead.note}</p>}
+                {lead.meetingAt && <p className="text-paragraph-sm text-text-sub-600" suppressHydrationWarning>Meeting {formatWhen(lead.meetingAt)}</p>}
+                {lead.actionRequiredAt && <p className="text-paragraph-sm text-text-sub-600" suppressHydrationWarning>{actionRequiredText(lead.actionRequiredAt)}</p>}
                 <dl className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-paragraph-xs text-text-sub-600">
                   <Stat label="Calls" value={summary.calls} />
                   <Stat label="Connected" value={summary.connected} />

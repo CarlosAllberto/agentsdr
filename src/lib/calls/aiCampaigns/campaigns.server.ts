@@ -586,6 +586,8 @@ function toLead(
     note: contact.aiNote,
     currentStep: currentStepLabel(contact, campaign),
     nextAt: open ? iso(contact.aiNextAt) : null,
+    actionRequiredAt: contact.stage === "follow_up" ? iso(contact.followUpAt) : null,
+    meetingAt: status === "booked" ? iso(contact.aiMeetingAt) : null,
     lastOutcome: latest.get(contact.id) ?? null,
     calls: callCounts.get(contact.id) ?? 0,
     numberName: contact.aiStationId ? (stationNames.get(contact.aiStationId) ?? null) : null,
