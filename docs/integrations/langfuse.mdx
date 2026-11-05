@@ -1,0 +1,96 @@
+---
+title: "Langfuse"
+description: "Connect a Langfuse project to edit the prompts AgentSDR's AI uses and to trace every AI call, phone calls included."
+icon: "chart-line"
+---
+
+[Langfuse](https://langfuse.com) is an open-source tool for prompts and LLM traces. Connecting it is optional. With it, each organization gets two things:
+
+- **Editable prompts.** The prompts AgentSDR writes for its AI (reply classification, CRM drafts, AI columns, call transcription, the calling agent's fixed instructions, and others) live in your Langfuse project, versioned. Change one there and AgentSDR uses the new production version within a minute, with no deploy.
+- **Traces.** Every AI call is recorded in the project: its input, the prompt version it used, the model, the output, tokens and cost, and any error. An AI phone call is one Langfuse **session** (keyed by the call's id) holding its setup, every turn of the conversation and its transcription.
+
+Without Langfuse, AI features use the prompts built into AgentSDR and nothing is traced. Nothing else changes.
+
+<Info>
+**What you need**
+
+- A Langfuse project: on [Langfuse Cloud](https://cloud.langfuse.com) or your own Langfuse, version 3 or later, reachable over `https://`.
+- The **owner** or **admin** role in AgentSDR.
+- About 5 minutes.
+</Info>
+
+<Warning>
+Traces hold what the AI saw and wrote: lead names, messages, call transcripts. Connect a project whose access you control, and keep in mind where it is hosted.
+</Warning>
+
+## Connect Langfuse
+
+<Steps>
+  <Step title="Create a project">
+    Sign in to Langfuse and create a project for AgentSDR (or open an existing one). One project per AgentSDR organization keeps prompts and traces apart.
+  </Step>
+  <Step title="Create API keys">
+    In the project, open **Settings → API Keys** and click **Create new API keys**. Copy the **public key** (`pk-lf-…`) and the **secret key** (`sk-lf-…`). The secret key is shown only once. Use the project's keys, not organization-level keys.
+  </Step>
+  <Step title="Open AI provider in AgentSDR">
+    Go to **Settings → AI provider**. Under **Prompts and tracing (Langfuse)**, click **Connect** on the **Langfuse** card.
+  </Step>
+  <Step title="Fill in the three fields">
+    | Field | Where the value is |
+    |---|---|
+    | **Host** | The address you open Langfuse at: `https://cloud.langfuse.com` (EU), `https://us.cloud.langfuse.com` (US), or your own. |
+    | **Public key** | Step 2, starting `pk-lf-`. |
+    | **Secret key** | Step 2, starting `sk-lf-`. |
+  </Step>
+  <Step title="Click Connect & test">
+    AgentSDR calls `GET /api/public/projects` with the keys. If Langfuse accepts them, the connection is saved and AgentSDR uploads its prompts to the project, labelled **production**. A prompt the project already has is never overwritten.
+  </Step>
+</Steps>
+
+## Check that it works
+
+<Check>
+The **Langfuse** card shows **Connected**, and its **Prompts** line shows **In Langfuse** with how many prompts were uploaded.
+</Check>
+
+In Langfuse, **Prompts** lists AgentSDR's prompts in folders (`crm/`, `calls/`, `grid/`, …). After the next AI call, for example a CRM draft, **Tracing** shows a trace named after it (`crm-draft`), tagged with your organization.
+
+## Editing prompts
+
+Edit a prompt in Langfuse and give the new version the **production** label. AgentSDR reads the production version, cached for a minute. Keep the `{{variables}}` the prompt uses: AgentSDR fills them in, and a variable you remove is simply not used.
+
+If Langfuse cannot be reached, or a prompt is missing from the project, AgentSDR falls back to the copy built into it, so a call never fails because of Langfuse.
+
+When a new AgentSDR version adds a prompt, saving the connection again (Edit, then Save, leaving the secret blank) uploads the new one. Prompts you have edited stay as they are.
+
+## Turning tracing off
+
+Disconnecting Langfuse stops both prompts and traces for your organization. Whoever runs your AgentSDR deployment can also stop traces for every organization with the environment variable `LANGFUSE_TRACING=off`; prompts keep working.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Langfuse rejected these keys">
+    Langfuse answered 401. The public or secret key is wrong, or the keys belong to a different Langfuse host than the one entered (EU and US cloud are separate).
+  </Accordion>
+  <Accordion title="Langfuse refused these keys. Use a project's API keys">
+    Langfuse answered 403: the keys are organization-level keys. Create keys inside the project instead (project **Settings → API Keys**).
+  </Accordion>
+  <Accordion title="Could not reach Langfuse at that host">
+    Check the **Host** for typos, that it starts with `https://`, and that your AgentSDR server can reach it.
+  </Accordion>
+  <Accordion title="Prompts: Upload failed">
+    The connection is saved and tracing works, but Langfuse did not take the prompts. AI features use the built-in prompts meanwhile. Edit and save the connection to try again.
+  </Accordion>
+</AccordionGroup>
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="OpenRouter" icon="sparkles" href="/integrations/openrouter">
+    The AI provider every AI feature runs on.
+  </Card>
+  <Card title="Integrations overview" icon="plug" href="/integrations">
+    All integrations and who can connect them.
+  </Card>
+</CardGroup>

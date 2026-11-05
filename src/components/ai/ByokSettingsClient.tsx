@@ -311,7 +311,8 @@ function StepFrame({
 
 const linkClass = "inline-flex items-center gap-1 rounded text-label-xs text-text-sub-600 underline decoration-stroke-sub-300 underline-offset-2 outline-none transition hover:text-text-strong-950 hover:decoration-text-strong-950 focus-visible:ring-2 focus-visible:ring-primary-base";
 
-export default function ByokSettingsClient() {
+/** `children`: more of the AI provider page (Langfuse), shown after the steps and above the save bar. */
+export default function ByokSettingsClient({ children }: { children?: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(EMPTY_SETTINGS);
   const [catalog, setCatalog] = useState<Provider[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -769,6 +770,8 @@ export default function ByokSettingsClient() {
           </span>
         </label>
       </StepFrame>
+
+      {children}
 
       <div className="sticky bottom-0 z-10 -mx-4 -mb-5 flex flex-wrap items-center justify-between gap-3 border-t border-stroke-soft-200 bg-bg-white-0/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:-mb-6 sm:px-6 lg:-mx-8 lg:-mb-7 lg:px-8">
         <p className="text-paragraph-xs text-text-sub-600">

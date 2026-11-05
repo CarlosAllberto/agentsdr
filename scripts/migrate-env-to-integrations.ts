@@ -6,7 +6,8 @@
  *
  * The app stopped reading UNIPILE_*, GOOGLE_SERVICE_ACCOUNT_*,
  * OUTREACH_GMAIL_WATCH_TOPIC, R2_* and CALL_TRANSCRIPTION_*
- * when those moved into the database. A deployment that still has them only
+ * when those moved into the database, and LANGFUSE_PUBLIC_KEY / _SECRET_KEY /
+ * _BASE_URL when Langfuse became an integration (Nov 2026). A deployment that still has them only
  * in its env has every one of those features switched off until they are
  * entered in the UI; this enters them instead.
  *
@@ -46,6 +47,11 @@ const FROM_ENV: Record<Exclude<PlatformKey, "gologin" | "calcom">, Record<string
     accessKeyId: "R2_ACCESS_KEY_ID",
     secretAccessKey: "R2_SECRET_ACCESS_KEY",
     bucket: "R2_BUCKET",
+  },
+  langfuse: {
+    baseUrl: "LANGFUSE_BASE_URL",
+    publicKey: "LANGFUSE_PUBLIC_KEY",
+    secretKey: "LANGFUSE_SECRET_KEY",
   },
 };
 

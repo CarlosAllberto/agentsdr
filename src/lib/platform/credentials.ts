@@ -14,9 +14,11 @@ import {
   getPlatformIntegration,
   type PlatformCredentials,
   type PlatformKey,
+  type LangfusePromptUpload,
   type PlatformStatus,
   type UnipileWebhookRegistration,
 } from "./catalog";
+import { uploadMissingLangfusePrompts } from "@/lib/observability/langfusePrompts";
 import { registerUnipileWebhooks, unipileWebhookEndpoints, unregisterUnipileWebhooks, type UnipileWebhookEndpoint } from "./unipileWebhooks";
 import { verifyPlatformCredentials } from "./verify";
 import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
@@ -59,6 +61,8 @@ type PlatformConfig = {
   verifiedAt: string;
   /** Unipile only: the last webhook registration (unipileWebhooks.ts). */
   webhooks?: UnipileWebhookRegistration;
+  /** Langfuse only: the prompt upload on the last save (langfusePrompts.ts). */
+  prompts?: LangfusePromptUpload;
 };
 
 export class PlatformNotConnectedError extends Error {
@@ -129,6 +133,7 @@ export async function listPlatformStatus(): Promise<PlatformStatus[]> {
       secretsSet: config?.secretsSet ?? [],
       verifiedAt: config?.verifiedAt ?? null,
       webhooks: config?.webhooks ?? null,
+      prompts: config?.prompts ?? null,
     };
   });
 }
@@ -201,6 +206,13 @@ export async function savePlatformIntegration(key: PlatformKey, input: Record<st
           await registerUnipileWebhooks(currentOrganizationId(), credentials as PlatformCredentials["unipile"]),
         )
       : null;
+  // Like Unipile's webhooks: the project gets AgentSDR's prompts on save. A
+  // failure is shown on the card, never fails the save.
+  let prompts: LangfusePromptUpload | null = null;
+  if (key === "langfuse") {
+    prompts = await uploadMissingLangfusePrompts(credentials as PlatformCredentials["langfuse"]);
+    await storeConfigOutcome("langfuse", { prompts });
+  }
   return {
     key,
     connected: true,
@@ -208,22 +220,28 @@ export async function savePlatformIntegration(key: PlatformKey, input: Record<st
     secretsSet: config.secretsSet,
     verifiedAt: config.verifiedAt,
     webhooks,
+    prompts,
   };
 }
 
-/** Record a Unipile webhook registration on the integration's row, for Settings to show. */
-async function storeWebhookRegistration(registration: UnipileWebhookRegistration): Promise<UnipileWebhookRegistration> {
+/** Record the outcome of a step run after saving (webhooks, prompts) on the integration's row, for Settings to show. */
+async function storeConfigOutcome(key: PlatformKey, outcome: Pick<PlatformConfig, "webhooks" | "prompts">): Promise<void> {
   const [row] = await db
     .select({ id: gridProviders.id, config: gridProviders.config })
     .from(gridProviders)
-    .where(and(inOrg(gridProviders), eq(gridProviders.key, rowKey("unipile"))))
+    .where(and(inOrg(gridProviders), eq(gridProviders.key, rowKey(key))))
     .limit(1);
   if (row) {
     await db
       .update(gridProviders)
-      .set({ config: { ...row.config, webhooks: registration }, updatedAt: new Date() })
+      .set({ config: { ...row.config, ...outcome }, updatedAt: new Date() })
       .where(and(inOrg(gridProviders), eq(gridProviders.id, row.id)));
   }
+}
+
+/** Record a Unipile webhook registration on the integration's row, for Settings to show. */
+async function storeWebhookRegistration(registration: UnipileWebhookRegistration): Promise<UnipileWebhookRegistration> {
+  await storeConfigOutcome("unipile", { webhooks: registration });
   return registration;
 }
 
@@ -298,6 +316,16 @@ function normalize<K extends PlatformKey>(key: K, raw: Record<string, string>): 
   }
   if (key === "calcom") {
     const value: PlatformCredentials["calcom"] = { webhookSecret: text("webhookSecret"), apiKey: text("apiKey") };
+    return value as PlatformCredentials[K];
+  }
+  if (key === "langfuse") {
+    const host = text("baseUrl").replace(/\/+$/, "");
+    const baseUrl = host && !/^[a-z]+:\/\//i.test(host) ? `https://${host}` : host;
+    // A self-hosted Langfuse may sit under a path; it must still be https.
+    if (baseUrl && !/^https:\/\/[^\s/]+(\/[^\s]*)?$/.test(baseUrl)) {
+      throw new Error("Langfuse host must be an https:// address, like https://cloud.langfuse.com");
+    }
+    const value: PlatformCredentials["langfuse"] = { baseUrl, publicKey: text("publicKey"), secretKey: text("secretKey") };
     return value as PlatformCredentials[K];
   }
   const value: PlatformCredentials["r2"] = {

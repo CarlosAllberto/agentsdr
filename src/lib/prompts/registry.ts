@@ -1,8 +1,9 @@
 /**
- * Every prompt AgentSDR writes itself, by its Langfuse name. Langfuse holds
- * the live versions (label "production"); these copies are what
- * scripts/seed-langfuse-prompts.ts uploads and what a call uses when
- * Langfuse is not configured or cannot be reached. Names are
+ * Every prompt AgentSDR writes itself, by its Langfuse name. An
+ * organization's Langfuse project holds its live versions (label
+ * "production"); these copies are what saving the integration uploads
+ * (src/lib/observability/langfusePrompts.ts) and what a call uses when the
+ * organization has not connected Langfuse or it cannot be reached. Names are
  * "<area>/<what>", which Langfuse shows as folders.
  *
  * Only prompts written in code live here. What organizations write (CRM and

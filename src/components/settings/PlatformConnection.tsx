@@ -13,7 +13,15 @@ import { Frame, FramePanel } from "@/components/analytics/kit/Frame";
 import { DocsLink } from "@/components/page/DocsLink";
 import { useDialogs } from "@/components/DialogProvider";
 import { Callout, Field } from "@/components/settings/SettingsKit";
-import { PLATFORM_INTEGRATIONS, type PlatformIntegration, type PlatformKey, type PlatformStatus, type SetupStep, type UnipileWebhookRegistration } from "@/lib/platform/catalog";
+import {
+  PLATFORM_INTEGRATIONS,
+  type LangfusePromptUpload,
+  type PlatformIntegration,
+  type PlatformKey,
+  type PlatformStatus,
+  type SetupStep,
+  type UnipileWebhookRegistration,
+} from "@/lib/platform/catalog";
 import { cn } from "@/utils/cn";
 
 /**
@@ -171,6 +179,7 @@ function PlatformCard({
         )}
 
         {connected && integration.key === "unipile" && <UnipileWebhooks registration={status?.webhooks ?? null} />}
+        {connected && integration.key === "langfuse" && <LangfusePrompts upload={status?.prompts ?? null} />}
         {webhookUrl !== undefined && (
           <section className="flex flex-col gap-1.5 border-t border-stroke-soft-200 pt-3">
             <span className="text-label-xs text-text-strong-950">Webhook URL</span>
@@ -188,6 +197,37 @@ function PlatformCard({
         )}
       </FramePanel>
     </Frame>
+  );
+}
+
+/**
+ * The prompts AgentSDR uploads to a Langfuse project when it is saved:
+ * how many it created, or why it could not. Saving again retries.
+ */
+function LangfusePrompts({ upload }: { upload: LangfusePromptUpload | null }) {
+  const badge =
+    upload?.status === "uploaded"
+      ? { color: "green" as const, text: "In Langfuse" }
+      : upload?.status === "failed"
+        ? { color: "red" as const, text: "Upload failed" }
+        : { color: "gray" as const, text: "Not uploaded yet" };
+  const prompts = (count: number) => `${count} prompt${count === 1 ? "" : "s"}`;
+  return (
+    <section className="flex flex-col gap-1 border-t border-stroke-soft-200 pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-label-sm text-text-strong-950">Prompts</h4>
+        <Badge.Root size="small" variant="lighter" color={badge.color}>
+          {badge.text}
+        </Badge.Root>
+      </div>
+      <p className="text-paragraph-xs text-text-sub-600">
+        {upload?.status === "uploaded"
+          ? `On ${formatVerified(upload.at)} AgentSDR uploaded ${prompts(upload.created)} to this project, labelled production${upload.existing ? `; ${prompts(upload.existing)} were already there and were left as they are` : ""}. Edit them in Langfuse: AgentSDR uses the production version.`
+          : upload?.status === "failed"
+            ? `${upload.message ?? "Langfuse did not take the prompts."} Edit and save the connection to try again.`
+            : "AgentSDR uploads its prompts when the connection is saved. Edit and save it to upload them."}
+      </p>
+    </section>
   );
 }
 

@@ -3,7 +3,7 @@ import "server-only";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { crmKnowledgeDocuments, crmKnowledgeDocumentVersions } from "@/lib/crm/schema";
-import { inOrg } from "@/lib/tenancy/scope";
+import { inOrg, maybeCurrentOrganizationId } from "@/lib/tenancy/scope";
 import { pcm16Wav } from "../../../extensions/whatsapp-recorder/src/wav";
 import { renderAiInstructions } from "@/lib/crm/ai/instructions";
 import { DEFAULT_CALLING_INSTRUCTIONS, fillCallingPlaceholders } from "./callingInstructions";
@@ -511,7 +511,11 @@ function rehearseOnce(
 
 // --- voice sample -------------------------------------------------------------------
 
-/** Samples kept in memory, by voice and name: one Live session per voice is enough. */
+/**
+ * Samples kept in memory, by organization, voice and name: one Live session
+ * per voice is enough. The organization is in the key because its sample is
+ * spoken from its own Langfuse prompts and traced in its project.
+ */
 const voiceSamples = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
 const MAX_VOICE_SAMPLES = 64;
 
@@ -523,7 +527,7 @@ const MAX_VOICE_SAMPLES = 64;
 export function voiceSample(voice: string | null, name: string | null): Promise<Uint8Array<ArrayBuffer>> {
   const voiceId = parseAgentVoice(voice) ?? DEFAULT_AGENT_VOICE;
   const agentName = parseAgentName(name) ?? DEFAULT_AGENT_NAME;
-  const key = `${voiceId}|${agentName}`;
+  const key = `${maybeCurrentOrganizationId() ?? ""}|${voiceId}|${agentName}`;
   let sample = voiceSamples.get(key);
   if (!sample) {
     if (voiceSamples.size >= MAX_VOICE_SAMPLES) voiceSamples.delete(voiceSamples.keys().next().value!);

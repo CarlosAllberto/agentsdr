@@ -149,6 +149,7 @@
               "integrations/unipile",
               "integrations/cloudflare-r2",
               "integrations/openrouter",
+              "integrations/langfuse",
               "integrations/enrichment-providers",
               "integrations/resend",
               "integrations/google-sign-in"

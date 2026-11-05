@@ -7,21 +7,29 @@ import { LangfuseClient, type TextPromptClient } from "@langfuse/client";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { propagateAttributes, setLangfuseTracerProvider, startObservation } from "@langfuse/tracing";
 import { isDemoMode } from "@/lib/demo/mode";
+import type { PlatformCredentials } from "@/lib/platform/catalog";
+import { getPlatformCredentials } from "@/lib/platform/credentials";
 import { maybeCurrentOrganizationId } from "@/lib/tenancy/scope";
 import { fillPrompt, type PromptVariables } from "@/lib/prompts/template";
 import { PROMPTS, type PromptName } from "@/lib/prompts/registry";
+import { OrganizationSpanRouter, withTraceOrganization } from "./langfuseRouting";
 
 /**
  * Langfuse: where the prompts written for AgentSDR live (versioned, edited in
- * Langfuse) and where every AI call is traced. Platform infrastructure, like
- * Resend: one Langfuse project for the deployment, keyed in env
- * (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL), every
- * trace tagged with its organization. LANGFUSE_TRACING=off keeps prompts but
- * sends no traces (a self-hosted copy that should not ship transcripts out).
+ * Langfuse) and where every AI call is traced. A platform integration, per
+ * organization (Settings → AI provider): each organization that connects its
+ * own Langfuse project gets its prompts from there and its traces sent there.
+ * Without it — or outside an organization scope — prompts are the copies in
+ * code and nothing is traced. There are no env keys.
  *
- * The server is self-hosted Langfuse v3, so the SDK is pinned to v5 (v6 needs
- * a v4 server). Tracing uses an isolated OpenTelemetry provider: production
- * runs under Bun, and nothing else in the app uses OpenTelemetry.
+ * LANGFUSE_TRACING=off stops traces for the whole deployment (they hold lead
+ * names and transcripts) and keeps the prompts. Tests and the public demo
+ * never reach Langfuse.
+ *
+ * The SDK is pinned to v5 (v6 needs a v4 server, and AgentSDR's own is v3).
+ * Tracing uses an isolated OpenTelemetry provider whose processor routes each
+ * span to its organization's project (langfuseRouting.ts): production runs
+ * under Bun, and nothing else in the app uses OpenTelemetry.
  *
  * Nothing here may break an AI call: a prompt that cannot be fetched falls
  * back to the copy in src/lib/prompts/registry.ts, and tracing failures are
@@ -31,41 +39,106 @@ import { PROMPTS, type PromptName } from "@/lib/prompts/registry";
 const PROMPT_CACHE_SECONDS = 60;
 const PROMPT_FETCH_TIMEOUT_MS = 3_000;
 
-export function langfuseConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  // Tests never reach the network: they read the copies in code.
-  if (env.NODE_ENV === "test") return false;
-  return Boolean(env.LANGFUSE_PUBLIC_KEY?.trim() && env.LANGFUSE_SECRET_KEY?.trim()) && !isDemoMode(env);
+type LangfuseCredentials = PlatformCredentials["langfuse"];
+
+/** Whether this deployment may reach Langfuse at all: tests read the copies in code, the demo calls nothing. */
+export function langfuseAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV !== "test" && !isDemoMode(env);
 }
 
+/** Whether traces are sent (for organizations that connected Langfuse). LANGFUSE_TRACING=off is the kill switch. */
 export function langfuseTracingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return langfuseConfigured(env) && env.LANGFUSE_TRACING?.trim().toLowerCase() !== "off";
+  return langfuseAvailable(env) && env.LANGFUSE_TRACING?.trim().toLowerCase() !== "off";
 }
 
-type LangfuseState = { client: LangfuseClient; processor: LangfuseSpanProcessor | null };
+/** Same project, same keys: the client or processor built for them still serves. */
+function connectionIdentity(credentials: LangfuseCredentials): string {
+  return `${credentials.baseUrl}\n${credentials.publicKey}\n${credentials.secretKey}`;
+}
+
+type LangfuseState = {
+  /** One prompt client per organization, rebuilt when its credentials change. */
+  clients: Map<string, { identity: string; client: LangfuseClient }>;
+  /** Null when tracing is off. */
+  router: OrganizationSpanRouter<LangfuseCredentials> | null;
+};
 const globalForLangfuse = globalThis as typeof globalThis & { __agentsdrLangfuse?: LangfuseState | null };
 
-/** Starts the client and the tracer once per process (dev hot reload included). Null when not configured. */
-export function initLangfuse(): LangfuseState | null {
+/** Starts the tracer once per process (dev hot reload included). Null when Langfuse is unavailable here. */
+function initLangfuse(): LangfuseState | null {
   if (globalForLangfuse.__agentsdrLangfuse !== undefined) return globalForLangfuse.__agentsdrLangfuse;
-  if (!langfuseConfigured()) return (globalForLangfuse.__agentsdrLangfuse = null);
-  let processor: LangfuseSpanProcessor | null = null;
+  if (!langfuseAvailable()) return (globalForLangfuse.__agentsdrLangfuse = null);
+  let router: OrganizationSpanRouter<LangfuseCredentials> | null = null;
   if (langfuseTracingEnabled()) {
     try {
       context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-      processor = new LangfuseSpanProcessor({ exportMode: "batched" });
-      setLangfuseTracerProvider(new BasicTracerProvider({ spanProcessors: [processor] }));
+      router = new OrganizationSpanRouter<LangfuseCredentials>(
+        (credentials) =>
+          new LangfuseSpanProcessor({
+            baseUrl: credentials.baseUrl,
+            publicKey: credentials.publicKey,
+            secretKey: credentials.secretKey,
+            environment: environment(),
+            exportMode: "batched",
+          }),
+        connectionIdentity,
+      );
+      setLangfuseTracerProvider(new BasicTracerProvider({ spanProcessors: [router] }));
     } catch (error) {
       console.error("[langfuse] tracing could not start:", error);
-      processor = null;
+      router = null;
     }
   }
-  return (globalForLangfuse.__agentsdrLangfuse = { client: new LangfuseClient(), processor });
+  return (globalForLangfuse.__agentsdrLangfuse = { clients: new Map(), router });
 }
 
-/** Sends queued traces now: scripts before they exit, and anything that must not wait for the batch. */
+/**
+ * The organization in scope and its Langfuse credentials (null: not
+ * connected). Null overall when there is no organization, Langfuse is
+ * unavailable here, or the lookup failed — then nothing changes.
+ */
+async function organizationConnection(): Promise<{ state: LangfuseState; organizationId: string; credentials: LangfuseCredentials | null } | null> {
+  const organizationId = maybeCurrentOrganizationId();
+  if (!organizationId) return null;
+  const state = initLangfuse();
+  if (!state) return null;
+  try {
+    return { state, organizationId, credentials: await getPlatformCredentials("langfuse") };
+  } catch (error) {
+    console.error("[langfuse] could not read the organization's connection:", error);
+    return null;
+  }
+}
+
+function promptClient(state: LangfuseState, organizationId: string, credentials: LangfuseCredentials | null): LangfuseClient | null {
+  if (!credentials) {
+    state.clients.delete(organizationId);
+    return null;
+  }
+  const identity = connectionIdentity(credentials);
+  const current = state.clients.get(organizationId);
+  if (current?.identity === identity) return current.client;
+  const client = new LangfuseClient({ baseUrl: credentials.baseUrl, publicKey: credentials.publicKey, secretKey: credentials.secretKey });
+  state.clients.set(organizationId, { identity, client });
+  return client;
+}
+
+/**
+ * Whether spans started now are traced: the organization in scope has
+ * Langfuse connected and tracing is on. Brings its route up to date first.
+ */
+async function tracingOrganization(): Promise<{ router: OrganizationSpanRouter<LangfuseCredentials>; organizationId: string } | null> {
+  const connection = await organizationConnection();
+  const router = connection?.state.router;
+  if (!connection || !router) return null;
+  router.connect(connection.organizationId, connection.credentials);
+  return connection.credentials ? { router, organizationId: connection.organizationId } : null;
+}
+
+/** Sends queued traces now, for every organization: scripts before they exit, and anything that must not wait for the batch. */
 export async function flushLangfuse(): Promise<void> {
   try {
-    await globalForLangfuse.__agentsdrLangfuse?.processor?.forceFlush();
+    await globalForLangfuse.__agentsdrLangfuse?.router?.forceFlush();
   } catch (error) {
     console.error("[langfuse] flush failed:", error);
   }
@@ -81,16 +154,18 @@ export type ResolvedPrompt = {
 };
 
 /**
- * The template `name`: the Langfuse version labelled production (cached a
- * minute, refreshed in the background), or the copy in code when Langfuse is
- * not configured or cannot be reached. For builders that fill it themselves.
+ * The template `name`: the version labelled production in the Langfuse
+ * project of the organization in scope (cached a minute, refreshed in the
+ * background), or the copy in code when it has not connected Langfuse or it
+ * cannot be reached. For builders that fill it themselves.
  */
 export async function getPromptTemplate(name: PromptName): Promise<ResolvedPrompt> {
   const fallback = PROMPTS[name].template;
-  const state = initLangfuse();
-  if (state) {
+  const connection = await organizationConnection();
+  const langfuse = connection ? promptClient(connection.state, connection.organizationId, connection.credentials) : null;
+  if (langfuse) {
     try {
-      const client = await state.client.prompt.get(name, {
+      const client = await langfuse.prompt.get(name, {
         type: "text",
         cacheTtlSeconds: PROMPT_CACHE_SECONDS,
         fetchTimeoutMs: PROMPT_FETCH_TIMEOUT_MS,
@@ -162,15 +237,15 @@ function usageDetails(usage: GenerationUsage | null | undefined) {
 /**
  * Runs one model call inside a Langfuse generation: its input, the prompt
  * version, the model, the output and usage it reports through `record`, its
- * time, and the error if it throws. Tagged with the organization in scope.
- * Without Langfuse it just runs `run`.
+ * time, and the error if it throws. Sent to the Langfuse project of the
+ * organization in scope; without one it just runs `run`.
  */
 export async function traceGeneration<T>(trace: GenerationTrace, run: (record: (result: GenerationRecord) => void) => Promise<T>): Promise<T> {
-  const state = initLangfuse();
-  if (!state?.processor) return run(() => {});
+  const tracing = await tracingOrganization().catch(() => null);
+  if (!tracing) return run(() => {});
   let generation: ReturnType<typeof startGeneration> | null = null;
   try {
-    generation = startGeneration(trace);
+    generation = withTraceOrganization(tracing.organizationId, () => startGeneration(trace));
   } catch (error) {
     console.error("[langfuse] could not start a trace:", error);
   }
@@ -226,12 +301,7 @@ function startGeneration(trace: GenerationTrace) {
   );
 }
 
-/**
- * Records something that already happened (a phone call, after it ended) as
- * one Langfuse trace: a root span over the whole time and the observations
- * inside it, each with its own times.
- */
-export function recordPastTrace(trace: {
+type PastTrace = {
   name: string;
   startTime: Date;
   endTime: Date;
@@ -253,9 +323,23 @@ export function recordPastTrace(trace: {
     metadata?: Record<string, unknown>;
     linkPrompt?: boolean;
   }[];
-}): void {
-  const state = initLangfuse();
-  if (!state?.processor) return;
+};
+
+/**
+ * Records something that already happened (a phone call, after it ended) as
+ * one Langfuse trace in the project of the organization in scope: a root
+ * span over the whole time and the observations inside it, each with its
+ * own times. Fire and forget — it never throws and returns at once.
+ */
+export function recordPastTrace(trace: PastTrace): void {
+  void tracingOrganization()
+    .then((tracing) => {
+      if (tracing) withTraceOrganization(tracing.organizationId, () => startPastTrace(trace));
+    })
+    .catch((error) => console.error("[langfuse] could not record a past trace:", error));
+}
+
+function startPastTrace(trace: PastTrace): void {
   try {
     propagateAttributes(traceAttributes(trace), () => {
       const root = startObservation(trace.name, { input: trace.input, output: trace.output, metadata: trace.metadata }, { startTime: trace.startTime });

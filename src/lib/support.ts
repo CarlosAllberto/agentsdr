@@ -23,6 +23,7 @@ export const DOCS_PAGES = [
   "integrations/google-workspace",
   "integrations/unipile",
   "integrations/cloudflare-r2",
+  "integrations/langfuse",
   "linkedin/accounts#add-a-linkedin-account",
   "whatsapp/accounts",
   "whatsapp/accounts#link-a-number",

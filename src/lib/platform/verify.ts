@@ -19,6 +19,7 @@ export async function verifyPlatformCredentials<K extends PlatformKey>(
   if (key === "r2") return verifyR2(credentials as PlatformCredentials["r2"]);
   if (key === "gologin") return verifyGoLogin(credentials as PlatformCredentials["gologin"]);
   if (key === "calcom") return verifyCalcom(credentials as PlatformCredentials["calcom"]);
+  if (key === "langfuse") return verifyLangfuse(credentials as PlatformCredentials["langfuse"]);
   throw new Error("Unknown integration");
 }
 
@@ -69,6 +70,28 @@ async function verifyCalcom({ webhookSecret, apiKey }: PlatformCredentials["calc
   }
   if (response.status === 401 || response.status === 403) throw new Error("Cal.com didn't accept this API key");
   if (!response.ok) throw new Error(`Cal.com answered ${response.status}`);
+}
+
+/**
+ * GET /api/public/projects answers a project's API keys with that one
+ * project (Langfuse uses it as its own auth check), 401 for a wrong key
+ * pair and 403 for an organization-level key, which cannot read prompts.
+ */
+async function verifyLangfuse({ baseUrl, publicKey, secretKey }: PlatformCredentials["langfuse"]): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/public/projects`, {
+      headers: { Authorization: `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString("base64")}`, accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new Error("Could not reach Langfuse at that host");
+  }
+  if (response.status === 401) throw new Error("Langfuse rejected these keys — check the public and secret key, and that the host is the one they were created on");
+  if (response.status === 403) throw new Error("Langfuse refused these keys. Use a project's API keys (project Settings → API Keys), not an organization's");
+  if (!response.ok) throw new Error(`Langfuse answered ${response.status}`);
+  const body = (await response.json().catch(() => null)) as { data?: unknown } | null;
+  if (!body || !Array.isArray(body.data)) throw new Error("That host did not answer like Langfuse — check the address");
 }
 
 async function verifyGoogle(credentials: PlatformCredentials["google"]): Promise<void> {

@@ -244,7 +244,8 @@ function freePortraits(kind: "men" | "women"): number[] {
 // Platform integrations (placeholder credentials; nothing calls them)
 // ---------------------------------------------------------------------------
 
-const PLACEHOLDER_CREDENTIALS: Record<PlatformKey, Record<string, string>> = {
+// Langfuse stays unconnected: the demo never traces, and the AI provider page shows how to connect it.
+const PLACEHOLDER_CREDENTIALS: Record<Exclude<PlatformKey, "langfuse">, Record<string, string>> = {
   unipile: { baseUrl: "https://api.unipile.example", apiKey: "demo-unipile-key", notifySecret: "demo-notify-secret" },
   google: {
     clientEmail: "agentsdr-sender@northwind-demo.iam.gserviceaccount.example",
@@ -257,7 +258,7 @@ const PLACEHOLDER_CREDENTIALS: Record<PlatformKey, Record<string, string>> = {
 };
 
 async function seedPlatformIntegrations(ctx: DemoContext) {
-  for (const key of Object.keys(PLACEHOLDER_CREDENTIALS) as PlatformKey[]) {
+  for (const key of Object.keys(PLACEHOLDER_CREDENTIALS) as (keyof typeof PLACEHOLDER_CREDENTIALS)[]) {
     const integration = getPlatformIntegration(key);
     if (!integration) continue;
     const stored = Object.fromEntries(integration.fields.map((f) => [f.key, PLACEHOLDER_CREDENTIALS[key][f.key] ?? ""]));

@@ -109,11 +109,11 @@ first name.
 
 ## Platform integrations, not env
 
-Unipile, Google Workspace (Gmail service account), Cloudflare R2 and, for
-calling, GoLogin and Cal.com are connected **per
-organization** from the Connection page of the channel each
-powers (Settings → Email / LinkedIn / WhatsApp), never from env —
-there is no env fallback. `src/lib/platform/` owns them: `catalog.ts` (client-safe fields),
+Unipile, Google Workspace (Gmail service account), Cloudflare R2, for
+calling GoLogin and Cal.com, and Langfuse (prompts and tracing) are connected
+**per organization** from the Connection page of the channel each
+powers (Settings → Email / LinkedIn / WhatsApp; Langfuse on Settings → AI
+provider), never from env — there is no env fallback. `src/lib/platform/` owns them: `catalog.ts` (client-safe fields),
 `credentials.ts` (`getPlatformCredentials` / `requirePlatformCredentials` /
 `isPlatformConnected`), `verify.ts` (one live call before saving).
 
@@ -149,24 +149,36 @@ cron secrets and tuning knobs. Two deliberate exceptions:
   `GRID_HTTP_ALLOW_PRIVATE=true`; see `src/lib/grid/runners/http.ts`.
 
 `scripts/migrate-env-to-integrations.ts` copied an existing env setup into
-the store once (verifying each); keep it as the record of that move.
+the store once (verifying each; Langfuse's old `LANGFUSE_*` keys too); keep
+it as the record of that move.
 
 ## Prompts live in Langfuse, and every AI call is traced
 
-Every prompt AgentSDR writes itself is a Langfuse prompt (self-hosted
-`fuse.kandid.ai`, project "AgentSDR"; server v3, so the `@langfuse/*` SDK is
-pinned to v5 — v6 needs a v4 server). `src/lib/prompts/registry.ts` lists
-them by name (`<area>/<what>`, e.g. `calls/agent-system`, `crm/draft-system`)
-with the copy in code, which is what `scripts/seed-langfuse-prompts.ts`
-uploads (`--update` pushes a changed copy as a new production version) and
-what a call uses when Langfuse is unreachable or unconfigured (tests always).
+Langfuse is an optional platform integration **per organization**
+(`langfuse`: host, public and secret key; Settings → AI provider, under
+OpenRouter). An organization that connects its project gets its prompts from
+there and its traces sent there; one that has not — or code running outside
+an organization scope — uses the copies in code and traces nothing. Our own
+is self-hosted `fuse.kandid.ai`, server v3, so the `@langfuse/*` SDK is
+pinned to v5 (v6 needs a v4 server). There are no `LANGFUSE_*` keys in env.
+
+Every prompt AgentSDR writes itself is a Langfuse prompt.
+`src/lib/prompts/registry.ts` lists them by name (`<area>/<what>`, e.g.
+`calls/agent-system`, `crm/draft-system`) with the copy in code, which is
+what saving the integration uploads to the project (only the missing ones,
+labelled production; `src/lib/observability/langfusePrompts.ts`), what
+`scripts/seed-langfuse-prompts.ts --org <id>` syncs (`--update` pushes a
+changed copy as a new production version, `--check` lists differences) and
+what a call uses when Langfuse is unconnected or unreachable (tests always).
 Templates use `{{variable}}` plus `{{#flag}}…{{/flag}}` / `{{^flag}}…{{/flag}}`
 sections (`src/lib/prompts/template.ts`), so wording stays in Langfuse and
 code only computes values. What organizations write (CRM and calling
 instructions, knowledge, campaign instructions) stays in the database and
 reaches a prompt as a variable. Never write prompt text inline in a feature:
 add it to the registry and read it with `getPrompt` / `getPromptTemplate`
-(`src/lib/observability/langfuse.ts`, 60 s cache).
+(`src/lib/observability/langfuse.ts`: one client per organization, 60 s
+cache). Anything that caches a result built from a prompt must key it by
+organization.
 
 Every model call is wrapped in `traceGeneration` (input, prompt versions,
 model, output, tokens, errors; tagged with the organization as
@@ -175,10 +187,14 @@ model, output, tokens, errors; tagged with the organization as
 by the call id: `call-agent-setup` (the full system prompt, at the token
 mint), `call-conversation` (every turn, reply gaps, call notes, outcome —
 `src/lib/calls/callTrace.ts`, when the worker posts the timeline) and its
-transcription. Env, like Resend: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
-`LANGFUSE_BASE_URL`; `LANGFUSE_TRACING=off` keeps prompts but sends no traces
-(they hold lead names and transcripts). Tracing must never break a call:
-failures are logged and swallowed.
+transcription. One OpenTelemetry provider serves the process; its processor
+(`src/lib/observability/langfuseRouting.ts`) routes each span to its
+organization's own `LangfuseSpanProcessor` by the `agentsdr.organization_id`
+it carries, and drops spans of organizations without Langfuse. Env keeps only
+`LANGFUSE_TRACING=off` (stops traces for every organization — they hold lead
+names and transcripts — and keeps prompts) and `LANGFUSE_TRACING_ENVIRONMENT`.
+Tests and the public demo never reach Langfuse. Tracing must never break a
+call: failures are logged and swallowed.
 
 ## Sending rules, not constants
 

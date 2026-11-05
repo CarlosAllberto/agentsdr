@@ -1,7 +1,7 @@
 /**
  * Platform integrations: the services AgentSDR itself runs on — Unipile for
  * LinkedIn and WhatsApp, Google Workspace for Gmail, Cloudflare R2 for call
- * recordings. Each is connected once per organization from the Connection
+ * recordings, Langfuse for the AI's prompts and traces. Each is connected once per organization from the Connection
  * page of the channel it powers (PLATFORM_SETTINGS_HREF), and a feature works
  * only while its integration is connected. None of them is read from env.
  *
@@ -16,7 +16,7 @@
 
 import { docsPageUrl } from "@/lib/support";
 
-export type PlatformKey = "unipile" | "google" | "r2" | "gologin" | "calcom";
+export type PlatformKey = "unipile" | "google" | "r2" | "gologin" | "calcom" | "langfuse";
 
 /** The decrypted credential object stored for each platform. */
 export type PlatformCredentials = {
@@ -56,6 +56,14 @@ export type PlatformCredentials = {
     webhookSecret: string;
     /** Optional Cal.com API key (cal_live_…); empty when not given. */
     apiKey: string;
+  };
+  langfuse: {
+    /** The Langfuse host, e.g. https://cloud.langfuse.com or a self-hosted one — no trailing slash. */
+    baseUrl: string;
+    /** pk-lf-… */
+    publicKey: string;
+    /** sk-lf-… */
+    secretKey: string;
   };
 };
 
@@ -328,6 +336,54 @@ export const PLATFORM_INTEGRATIONS: readonly PlatformIntegration[] = [
       },
     ],
   },
+  {
+    key: "langfuse",
+    name: "Langfuse",
+    description: "Holds the prompts AgentSDR's AI uses, versioned and editable without a deploy, and traces every AI call.",
+    enables: [
+      "Editing the AI's prompts in Langfuse (versioned)",
+      "Traces of every AI call: inputs, outputs, tokens and cost, phone calls as sessions",
+    ],
+    websiteUrl: "https://langfuse.com",
+    iconUrl: "/Integrations - Icon/langfuse.svg",
+    guideUrl: docsPageUrl("integrations/langfuse"),
+    docsUrl: "https://langfuse.com/docs",
+    setupSteps: [
+      "In Langfuse (cloud.langfuse.com, or your own Langfuse v3+), create a project for AgentSDR, or open an existing one.",
+      "Open the project's Settings → API Keys → Create new API keys. Copy the public and the secret key; the secret is shown only once.",
+      "Paste the host, the public key and the secret key below.",
+      "Save. AgentSDR uploads its prompts to the project, labelled production. Prompts already in the project are never overwritten.",
+    ],
+    fields: [
+      {
+        key: "baseUrl",
+        label: "Host",
+        placeholder: "https://cloud.langfuse.com",
+        help: "The address you open Langfuse at: https://cloud.langfuse.com (EU), https://us.cloud.langfuse.com (US), or your self-hosted Langfuse. https:// is added if missing.",
+        inputType: "text",
+        required: true,
+        secret: false,
+      },
+      {
+        key: "publicKey",
+        label: "Public key",
+        placeholder: "pk-lf-…",
+        help: "Project settings → API Keys, the key starting pk-lf-.",
+        inputType: "text",
+        required: true,
+        secret: false,
+      },
+      {
+        key: "secretKey",
+        label: "Secret key",
+        placeholder: "sk-lf-…",
+        help: "Shown once, next to the public key, when you create the API keys. It starts sk-lf-.",
+        inputType: "password",
+        required: true,
+        secret: true,
+      },
+    ],
+  },
 ];
 
 /** OpenRouter is connected on the AI provider page; the Integrations page only shows its card. */
@@ -344,6 +400,7 @@ export const PLATFORM_SETTINGS_HREF: Record<PlatformKey, string> = {
   r2: "/settings/whatsapp-connection",
   gologin: "/settings/whatsapp-connection",
   calcom: "/settings/whatsapp-connection",
+  langfuse: "/settings/ai",
 };
 
 /** Where that page sits in the Settings sidebar, for messages. */
@@ -353,6 +410,7 @@ export const PLATFORM_SETTINGS_LABEL: Record<PlatformKey, string> = {
   r2: "Settings → WhatsApp → Integrations",
   gologin: "Settings → WhatsApp → Integrations",
   calcom: "Settings → WhatsApp → Integrations",
+  langfuse: "Settings → AI provider",
 };
 
 export function getPlatformIntegration(key: string): PlatformIntegration | null {
@@ -374,6 +432,8 @@ export type PlatformStatus = {
   verifiedAt: string | null;
   /** Unipile only: the outcome of registering its webhooks. */
   webhooks?: UnipileWebhookRegistration | null;
+  /** Langfuse only: the outcome of uploading AgentSDR's prompts on the last save. */
+  prompts?: LangfusePromptUpload | null;
 };
 
 /** What happened when AgentSDR registered Unipile's webhooks for an organization. */
@@ -386,5 +446,18 @@ export type UnipileWebhookRegistration = {
   /** One per registered webhook: our key and Unipile's webhook id. */
   items?: { key: string; id: string }[];
   /** Why it was skipped or failed, in words for the settings page. */
+  message?: string;
+};
+
+/** What happened when AgentSDR uploaded its prompts to an organization's Langfuse project. */
+export type LangfusePromptUpload = {
+  /** uploaded: every missing prompt was created (possibly none). failed: Langfuse refused or could not be reached. */
+  status: "uploaded" | "failed";
+  at: string;
+  /** Prompts created in the project. */
+  created: number;
+  /** Prompts the project already had, left as they are. */
+  existing: number;
+  /** Why it failed, in words for the settings page. */
   message?: string;
 };
