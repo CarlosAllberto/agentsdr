@@ -146,11 +146,12 @@ async function decide(station: StationRow, { workerId, call }: WorkerIncomingCal
   });
 
   if (!created) {
-    // On another call: they show up as a missed call, so call them back first.
+    // On another call: they show up as a missed call, so call them back first — as a call-back
+    // that returns to the same step, never by running the next step early (it may be a message).
     if (contact && countsAsStep && isOpen(contact.contact.aiStatus)) {
       await db
         .update(callCampaignContacts)
-        .set({ aiNextAt: now, updatedAt: now })
+        .set({ aiStatus: "callback", aiCallbacks: sql`${callCampaignContacts.aiCallbacks} + 1`, aiNextAt: now, aiNote: "Called us while the number was busy; calling back", updatedAt: now })
         .where(and(eq(callCampaignContacts.id, contact.contact.id), sql`${callCampaignContacts.aiStatus} IN ${AI_OPEN_STATUSES}`));
     }
     return no("the number is on another call");

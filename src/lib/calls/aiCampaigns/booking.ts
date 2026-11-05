@@ -25,9 +25,9 @@ import { getPlatformCredentials } from "@/lib/platform/credentials";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { normalizePhone } from "../phone";
 import { organizationPhoneCountry } from "../phone.server";
-import { callCampaignContacts, callCampaigns } from "../schema";
+import { callCampaignContacts, callCampaigns, callCampaignStepRuns } from "../schema";
 import { AI_OPEN_STATUSES, type AiContactStatus } from "./contract";
-import { BOOKING_REVIEW_MS, calcomSignatureValid, meetingPrepAt, parseCalcomEvent, type CalcomBookingEvent } from "./engineRules";
+import { BOOKING_LINK_KEY, BOOKING_REVIEW_MS, calcomSignatureValid, meetingPrepAt, parseCalcomEvent, type CalcomBookingEvent } from "./engineRules";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** After a cancellation, the chase resumes after this. */
@@ -146,9 +146,11 @@ async function markBooked(event: CalcomBookingEvent): Promise<string[]> {
 }
 
 /**
- * A cancelled booking: back to chasing at the step it was at. Only the
- * booking we hold — a cancelled booking at another time (the old slot of a
- * reschedule) leaves the lead booked.
+ * A cancelled booking: back to chasing at the step it was at, if the chase
+ * was working it (the booking link went out from a call); a lead that booked
+ * some other way — after replying, or from a forwarded or plain link — goes
+ * to a person instead. Only the booking we hold — a cancelled booking at
+ * another time (the old slot of a reschedule) leaves the lead booked.
  */
 async function markCancelled(event: CalcomBookingEvent): Promise<string[]> {
   const matched = (await matchContacts(event, ["booked"], ["booked"])).filter(
@@ -156,8 +158,18 @@ async function markCancelled(event: CalcomBookingEvent): Promise<string[]> {
   );
   const changed: { id: string; personId: string }[] = [];
   const now = new Date();
+  const chased = matched.length
+    ? new Set(
+        (
+          await db
+            .select({ contactId: callCampaignStepRuns.contactId })
+            .from(callCampaignStepRuns)
+            .where(and(inArray(callCampaignStepRuns.contactId, matched.map((contact) => contact.id)), eq(callCampaignStepRuns.stepKey, BOOKING_LINK_KEY)))
+        ).map((row) => row.contactId),
+      )
+    : new Set<string>();
   for (const contact of matched) {
-    const resume = contact.chaseSteps[contact.aiStep];
+    const resume = chased.has(contact.id) ? contact.chaseSteps[contact.aiStep] : undefined;
     const [row] = await db
       .update(callCampaignContacts)
       .set(

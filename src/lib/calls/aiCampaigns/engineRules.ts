@@ -367,7 +367,10 @@ export function callResultFor(call: SettledCall, now: Date): AiCallResult | "wai
       return "no_answer";
     case "failed":
       if (call.error && /isn't on WhatsApp/i.test(call.error)) return "not_on_whatsapp";
-      if (call.error && /^Upload failed/i.test(call.error)) return call.agentOutcome?.outcome === "no_response" ? "no_answer" : "conversation";
+      // The agent recorded how it went before the call broke (a crashed browser, a failed
+      // upload): that is what happened, whatever ended the call — never a retry of the step.
+      if (call.agentOutcome) return call.agentOutcome.outcome === "no_response" ? "no_answer" : "conversation";
+      if (call.error && /^Upload failed/i.test(call.error)) return "conversation";
       return "error";
   }
 }

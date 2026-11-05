@@ -26,6 +26,7 @@ import { currentOrganizationId, inOrg } from "@/lib/tenancy/scope";
 import { parseAgentName, parseAgentVoice } from "@/lib/calls/liveAgent";
 import { AGENT_OUTCOMES, type AgentOutcomeKind, type CallCampaignStatus } from "@/lib/calls/contract";
 import { CallApiError, expireStaleCalls, startCall } from "@/lib/calls/sessions";
+import { isPersonDoNotContact } from "@/lib/crm/policies";
 import { agentBrief } from "./brief.server";
 import { callCampaignContacts, callCampaignStations, callCampaignStepRuns, callCampaigns, callSessions, callingStations } from "@/lib/calls/schema";
 import {
@@ -1079,6 +1080,7 @@ export async function getAiCampaignStats(campaignId: string): Promise<AiCampaign
 export async function callAiLeadNow(campaignId: string, contactId: string, request: CallAiLeadRequest = {}): Promise<CallAiLeadResponse> {
   const campaign = await loadCampaignRow(campaignId);
   const { contact } = await loadContact(campaignId, contactId);
+  if (await isPersonDoNotContact(db, contact.personId)) throw new CallApiError(409, "This person asked not to be contacted");
   const [open] = await db
     .select({ id: callSessions.id })
     .from(callSessions)

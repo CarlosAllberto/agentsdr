@@ -104,6 +104,8 @@ describe("parseAgentOutcome whenAt", () => {
     expect(parseWhenAt("2026-10-27T09:30:00Z", now)).not.toBeNull();
     expect(parseWhenAt("2027-02-01T10:00:00Z", now)).toBeNull();
     expect(parseWhenAt("Thursday 4pm", now)).toBeNull();
+    expect(parseWhenAt("2026-10-29T16:00:00", now)).toBeNull();
+    expect(parseWhenAt("2026-10-29T16:00:00+0530", now)).not.toBeNull();
     expect(parseWhenAt(null, now)).toBeNull();
   });
 });

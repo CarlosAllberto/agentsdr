@@ -39,7 +39,7 @@ import { syncCallFollowUpSafely } from "../crmFollowUp";
 import { callCampaignContacts, callCampaigns, callCampaignStations, callCampaignStepRuns, callSessions, callingStations, stationMessageJobs } from "../schema";
 import { CallApiError, expireStaleCalls, startCall } from "../sessions";
 import { agentBrief } from "./brief.server";
-import { AI_OPEN_STATUSES, DEFAULT_BOOKING_MESSAGE, isOffSequenceCallKey, type AiCallResult } from "./contract";
+import { AI_OPEN_STATUSES, DEFAULT_BOOKING_MESSAGE, isOffSequenceCallKey, type AiCallResult, type AiContactStatus } from "./contract";
 import {
   afterCall,
   afterMessage,
@@ -164,9 +164,9 @@ async function bookingLinkSent(contactId: string): Promise<boolean> {
   return !!row;
 }
 
-function engineContact(contact: ContactRow, linkSent: boolean): AiEngineContact {
+function engineContact(contact: ContactRow, linkSent: boolean, status: AiContactStatus = contact.aiStatus ?? "queued"): AiEngineContact {
   return {
-    status: contact.aiStatus ?? "queued",
+    status,
     step: contact.aiStep,
     callbacks: contact.aiCallbacks,
     failures: contact.aiFailures,
@@ -183,7 +183,26 @@ function engineContact(contact: ContactRow, linkSent: boolean): AiEngineContact 
  * required, once synced and due), an open lead is still to call, anything
  * else is done.
  */
-async function writeDecision(executor: Pick<typeof db, "update">, contactId: string, decision: AiDecision, now: Date): Promise<boolean> {
+/**
+ * A closed lead a conversation can reopen (reopenWith): they called back, or
+ * someone pressed AI call, and agreed to something. Never a lead that booked
+ * or was stopped.
+ */
+const REOPENABLE_STATUSES: readonly AiContactStatus[] = ["replied", "handoff", "not_interested", "unreached", "failed"];
+
+/** What a conversation on a closed lead may reopen it for: a yes (the link and the chase), a call-back, or a person. */
+function reopensLead(decision: AiDecision): boolean {
+  return Boolean(decision.sendBookingLink || decision.status === "callback" || decision.handoff);
+}
+
+async function writeDecision(
+  executor: Pick<typeof db, "update">,
+  contactId: string,
+  decision: AiDecision,
+  now: Date,
+  /** Write onto a closed lead still in this status (a reopen); otherwise only onto an open lead. */
+  reopenFrom?: AiContactStatus,
+): Promise<boolean> {
   const open = isOpenAiStatus(decision.status);
   const followUpAt = decision.handoff?.followUpAt ?? (decision.status === "chasing" ? decision.reviewAt ?? null : null);
   const rows = await executor
@@ -199,7 +218,13 @@ async function writeDecision(executor: Pick<typeof db, "update">, contactId: str
       followUpAt,
       updatedAt: now,
     })
-    .where(and(contactInScope(), eq(callCampaignContacts.id, contactId), inArray(callCampaignContacts.aiStatus, [...AI_OPEN_STATUSES])))
+    .where(
+      and(
+        contactInScope(),
+        eq(callCampaignContacts.id, contactId),
+        reopenFrom ? eq(callCampaignContacts.aiStatus, reopenFrom) : inArray(callCampaignContacts.aiStatus, [...AI_OPEN_STATUSES]),
+      ),
+    )
     .returning({ id: callCampaignContacts.id });
   return rows.length > 0;
 }
@@ -291,6 +316,8 @@ async function finishRun(
   /** Null: the run finishes and the lead stays as it is. */
   decide: (contact: AiEngineContact) => AiDecision | null,
   now: Date,
+  /** A conversation off the sequence (a call-back, an AI call from the lead page): it may reopen a closed lead. */
+  options: { reopen?: boolean } = {},
 ): Promise<{ decision: AiDecision | null } | null> {
   const linkSent = await bookingLinkSent(row.contact.id);
   return db.transaction(async (tx) => {
@@ -305,10 +332,21 @@ async function finishRun(
       .where(and(eq(callCampaignStepRuns.id, row.run.id), eq(callCampaignStepRuns.status, "started")))
       .returning({ id: callCampaignStepRuns.id });
     if (!finished) return null;
-    if (!contact || !isOpenAiStatus(contact.aiStatus)) return { decision: null };
-    const decision = decide(engineContact(contact, linkSent));
-    if (!decision) return { decision: null };
-    const applied = await writeDecision(tx, contact.id, decision, now);
+    if (!contact) return { decision: null };
+    if (isOpenAiStatus(contact.aiStatus)) {
+      const decision = decide(engineContact(contact, linkSent));
+      if (!decision) return { decision: null };
+      const applied = await writeDecision(tx, contact.id, decision, now);
+      return { decision: applied ? decision : null };
+    }
+    // A closed lead: only a conversation off the sequence that agreed to something reopens it,
+    // read as if they were still being reached — the agent offered them the campaign's goal.
+    const closed = contact.aiStatus;
+    if (!options.reopen || !closed || !REOPENABLE_STATUSES.includes(closed)) return { decision: null };
+    if (await isPersonDoNotContact(tx, contact.personId)) return { decision: null };
+    const decision = decide(engineContact(contact, linkSent, "reaching"));
+    if (!decision || !reopensLead(decision)) return { decision: null };
+    const applied = await writeDecision(tx, contact.id, decision, now, closed);
     return { decision: applied ? decision : null };
   });
 }
@@ -354,6 +392,7 @@ async function settleCall(row: OpenRun, now: Date): Promise<boolean> {
     { status: result === "error" ? "failed" : "done", result, error: call.error },
     (state) => (inbound && result !== "conversation" ? null : afterCall(state, result, outcome, engineCampaign(campaign), now, call.error)),
     now,
+    { reopen: inbound && result === "conversation" },
   );
   if (!settled) return false;
 
@@ -422,23 +461,31 @@ async function sendBookingLink(contact: ContactRow, campaign: CampaignRow, stati
   };
 
   if (!stationId) return fail(null, "No calling number to send it from");
-  const [person] = await db
-    .select({ person: people, company: companies })
-    .from(people)
-    .leftJoin(companies, eq(people.companyId, companies.id))
-    .where(and(inOrg(people), eq(people.id, contact.personId)))
-    .limit(1);
-  if (!person) return fail(null, "The person is no longer in this organization");
-  const link = campaign.aiBookingUrl ? bookingLinkFor(campaign.aiBookingUrl, await bookingCodeFor(contact)) : null;
-  if (!link) return fail(null, "The campaign's booking link is not a valid URL");
-  const body = renderMessage(campaign.aiBookingMessage?.trim() || DEFAULT_BOOKING_MESSAGE, person, campaign, link);
-  if (!body) return fail(null, "The booking message is empty");
+  // The lead is already chasing with nothing due until this sends, so anything that
+  // throws before the message is queued hands it to a person rather than leaving it there.
+  let body: string;
+  let run: { id: string } | undefined;
+  try {
+    const [person] = await db
+      .select({ person: people, company: companies })
+      .from(people)
+      .leftJoin(companies, eq(people.companyId, companies.id))
+      .where(and(inOrg(people), eq(people.id, contact.personId)))
+      .limit(1);
+    if (!person) return fail(null, "The person is no longer in this organization");
+    const link = campaign.aiBookingUrl ? bookingLinkFor(campaign.aiBookingUrl, await bookingCodeFor(contact)) : null;
+    if (!link) return fail(null, "The campaign's booking link is not a valid URL");
+    body = renderMessage(campaign.aiBookingMessage?.trim() || DEFAULT_BOOKING_MESSAGE, person, campaign, link);
+    if (!body) return fail(null, "The booking message is empty");
 
-  const [run] = await db
-    .insert(callCampaignStepRuns)
-    .values({ contactId: contact.id, stepKey: BOOKING_LINK_KEY, kind: "message", stationId })
-    .onConflictDoNothing()
-    .returning({ id: callCampaignStepRuns.id });
+    [run] = await db
+      .insert(callCampaignStepRuns)
+      .values({ contactId: contact.id, stepKey: BOOKING_LINK_KEY, kind: "message", stationId })
+      .onConflictDoNothing()
+      .returning({ id: callCampaignStepRuns.id });
+  } catch (error) {
+    return fail(null, `The booking link could not be prepared: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (!run) return; // Already sent once (its settle moves the lead on).
   try {
     const queued = await queueStationMessage({ stationId, personId: contact.personId, phone, body });
@@ -450,7 +497,6 @@ async function sendBookingLink(contact: ContactRow, campaign: CampaignRow, stati
 
 type PersonWithCompany = { person: typeof people.$inferSelect; company: typeof companies.$inferSelect | null };
 
-/** A WhatsApp step's text: merge fields from the Person and company, plus {{agentName}} and {{bookingLink}}. */
 /**
  * The lead's booking code, given the first time a link is sent: random, tried
  * again past a collision, and a character longer after a few, so the space
@@ -476,6 +522,7 @@ async function bookingCodeFor(contact: ContactRow): Promise<string> {
   throw new Error("Could not find a free booking code");
 }
 
+/** A WhatsApp step's text: merge fields from the Person and company, plus {{agentName}} and {{bookingLink}}. */
 function renderMessage(body: string, lead: PersonWithCompany, campaign: CampaignRow, bookingLink: string | null): string {
   const variables = campaignLeadVariables(lead.person, lead.company, {});
   variables.agentName = campaign.aiAgentName?.trim() || DEFAULT_AGENT_NAME;

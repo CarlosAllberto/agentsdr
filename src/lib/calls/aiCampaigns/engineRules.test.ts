@@ -315,6 +315,11 @@ describe("callResultFor", () => {
     expect(callResultFor(call("no_recording"), NOW)).toBe("no_answer");
     expect(callResultFor(call("failed", { error: "+91 98… isn't on WhatsApp" }), NOW)).toBe("not_on_whatsapp");
     expect(callResultFor(call("failed", { error: "Upload failed: 500" }), NOW)).toBe("conversation");
+    // The agent recorded the outcome before the call broke: it stands, never a retry of the step.
+    const said = (kind: AgentOutcomeKind) => ({ agentOutcome: outcome(kind), error: "The station's browser closed during the call" });
+    expect(callResultFor(call("failed", said("do_not_contact")), NOW)).toBe("conversation");
+    expect(callResultFor(call("failed", said("no_response")), NOW)).toBe("no_answer");
+    expect(callResultFor(call("failed", { error: "The station's browser closed during the call" }), NOW)).toBe("error");
     expect(callResultFor(call("failed", { error: "The call worker stopped reporting on this call" }), NOW)).toBe("error");
   });
 });

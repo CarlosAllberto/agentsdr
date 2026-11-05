@@ -25,7 +25,7 @@ import type { callSessions } from "./schema";
 import { CallApiError } from "./sessions";
 import { fillPrompt } from "@/lib/prompts/template";
 import { PROMPTS, type PromptName } from "@/lib/prompts/registry";
-import { getPromptTemplate, getPromptTemplates, recordPastTrace, traceGeneration, type ResolvedPrompt } from "@/lib/observability/langfuse";
+import { getPromptTemplate, getPromptTemplates, traceGeneration, type ResolvedPrompt } from "@/lib/observability/langfuse";
 
 type CallSessionRow = typeof callSessions.$inferSelect;
 
@@ -101,7 +101,8 @@ const WHEN_AT_FUTURE_MS = 60 * 24 * 60 * 60_000;
 export function parseWhenAt(value: unknown, now = Date.now()): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim();
-  if (!/^\d{4}-\d{2}-\d{2}T/.test(text)) return null;
+  // The offset is required: without one Date.parse reads the server's own zone (UTC), hours off for the lead.
+  if (!/^\d{4}-\d{2}-\d{2}T.*(Z|[+-]\d{2}:?\d{2})$/i.test(text)) return null;
   const at = Date.parse(text);
   if (Number.isNaN(at) || at < now - WHEN_AT_PAST_MS || at > now + WHEN_AT_FUTURE_MS) return null;
   return text;

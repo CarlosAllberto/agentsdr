@@ -545,7 +545,11 @@ campaign's call by typing at `/api/calling/agent/rehearse`
 (`AgentRehearsal`). Everything about how the agent talks and reacts belongs
 in the calling instructions, not in code. "AI call" from a lead's drawer gets
 a step run `now:<call id>`, settled like a call-back's (only a conversation
-moves the lead).
+moves the lead; refused for Do Not Contact). Such a conversation also
+reopens a closed lead (replied, handed off, not interested, unreached,
+failed — never booked or stopped) when it agreed to something: a yes (link
+and chase), a call-back, or a person. A call that fails after the agent
+recorded its outcome keeps that outcome; it is never retried as an error.
 
 ### WhatsApp messaging through a station (no Unipile)
 
@@ -627,8 +631,8 @@ instructions, knowledge and goal (`composeAgentBrief` purpose `inbound`) and
 the agent name and voice they heard. Only a launched campaign also gets a
 step run `inbound:<call id>` that the engine settles like a placed call — but only a conversation moves the lead; a ring that never
 connected is not a sequence attempt (nor, for a rep campaign, an unanswered
-one). A lead who rang while the number was busy is called back first
-(`ai_next_at = now`). The prompt (`agentInstructions`, `formatHistory`, the
+one). A lead who rang while the number was busy becomes a call-back due now
+(status `callback`), so the same step resumes after it. The prompt (`agentInstructions`, `formatHistory`, the
 transcription prompt) says they called us; `agentsdrStation.answerCall()`
 arms the hook before pressing Accept, so the agent's microphone and the
 recording work as on a placed call.
