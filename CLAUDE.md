@@ -514,7 +514,12 @@ before it happens — never repeat a step; an uncertain message is failed,
 not resent. A reply on any channel (`ingestInboundReplyInTransaction`) sets
 open AI leads to `replied`. Cal.com (platform integration `calcom`; webhook
 `/api/webhooks/calcom?org=`, public) marks a lead `booked` through the
-`metadata[agentsdrContact]` the booking link carries.
+`metadata[c]=<code>` the booking link carries — the lead's 4-character
+`ai_booking_code` (unique across organizations, given when a link is first
+sent), and nothing else about the person, since a link may be forwarded.
+Links sent before codes carry `metadata[agentsdrContact]=<contact id>` and
+still match; a booking without either falls back to the attendee's email or
+phone.
 
 Instructions come in layers: a short fixed part in `liveAgent.ts` (it is a
 live cold phone call — one voice, short turns, wait for answers; who the

@@ -10,9 +10,9 @@ import "server-only";
  * on that page); a delivery is checked against that organization's secret
  * (x-cal-signature-256) before anything is read from it.
  *
- * A booking finds its lead by the contact id the link put in the booking's
- * metadata, else by the attendee's email or phone among the organization's
- * open AI leads. Created / rescheduled → `booked`, with the meeting time as
+ * A booking finds its lead by the booking code the link put in the booking's
+ * metadata (or, for a link sent before codes, the contact id), else by the
+ * attendee's email or phone among the organization's open AI leads. Created / rescheduled → `booked`, with the meeting time as
  * the lead's follow-up; cancelled → back to `chasing` where it was.
  */
 import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
@@ -71,7 +71,7 @@ export async function handleCalcomWebhook(request: Request): Promise<Response> {
 
 type MatchedContact = { id: string; personId: string; aiStep: number; followUpAt: Date | null; chaseSteps: (typeof callCampaigns.$inferSelect)["aiChaseSteps"] };
 
-/** The leads a booking names: by its metadata contact id, else by the attendee's email or phone among `statuses`. */
+/** The leads a booking names: by its metadata booking code or contact id, else by the attendee's email or phone among `statuses`. */
 async function matchContacts(
   event: CalcomBookingEvent,
   statuses: readonly AiContactStatus[],
@@ -85,12 +85,17 @@ async function matchContacts(
     chaseSteps: callCampaigns.aiChaseSteps,
   };
   const aiCampaign = and(inOrg(callCampaigns), eq(callCampaigns.runBy, "ai"));
-  if (event.contactId) {
+  const named = event.bookingCode
+    ? eq(callCampaignContacts.aiBookingCode, event.bookingCode)
+    : event.contactId
+      ? eq(callCampaignContacts.id, event.contactId)
+      : null;
+  if (named) {
     const byId = await db
       .select(columns)
       .from(callCampaignContacts)
       .innerJoin(callCampaigns, eq(callCampaigns.id, callCampaignContacts.campaignId))
-      .where(and(aiCampaign, eq(callCampaignContacts.id, event.contactId), inArray(callCampaignContacts.aiStatus, [...byIdStatuses])));
+      .where(and(aiCampaign, named, inArray(callCampaignContacts.aiStatus, [...byIdStatuses])));
     if (byId.length) return byId;
   }
   const country = await organizationPhoneCountry();

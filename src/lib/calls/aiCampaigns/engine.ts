@@ -32,6 +32,7 @@ import { isMigrationControlPaused } from "@/lib/migration/controls";
 import { latestDailySlot } from "@/lib/scheduler/slots";
 import { inOrg, runInOrganization } from "@/lib/tenancy/scope";
 import { campaignLeadVariables, renderCampaignStep } from "@/lib/whatsapp/campaigns/render";
+import { isUniqueViolation } from "@/lib/whatsapp/messages";
 import { queueStationMessage } from "@/lib/whatsapp/stationMessaging";
 import { DEFAULT_AGENT_NAME } from "../contract";
 import { syncCallFollowUpSafely } from "../crmFollowUp";
@@ -42,11 +43,13 @@ import { AI_OPEN_STATUSES, DEFAULT_BOOKING_MESSAGE, isOffSequenceCallKey, type A
 import {
   afterCall,
   afterMessage,
+  BOOKING_CODE_LENGTH,
   BOOKING_LINK_KEY,
   bookingLinkFor,
   callResultFor,
   dailyCallLimit,
   isOpenAiStatus,
+  newBookingCode,
   plannedAction,
   statusWhenStarted,
   withinCallingHours,
@@ -423,12 +426,7 @@ async function sendBookingLink(contact: ContactRow, campaign: CampaignRow, stati
     .where(and(inOrg(people), eq(people.id, contact.personId)))
     .limit(1);
   if (!person) return fail(null, "The person is no longer in this organization");
-  const link = bookingLinkFor(campaign.aiBookingUrl ?? "", {
-    contactId: contact.id,
-    name: person.person.fullName ?? ([person.person.firstName, person.person.lastName].filter(Boolean).join(" ") || null),
-    email: person.person.email,
-    phone,
-  });
+  const link = campaign.aiBookingUrl ? bookingLinkFor(campaign.aiBookingUrl, await bookingCodeFor(contact)) : null;
   if (!link) return fail(null, "The campaign's booking link is not a valid URL");
   const body = renderMessage(campaign.aiBookingMessage?.trim() || DEFAULT_BOOKING_MESSAGE, person, campaign, link);
   if (!body) return fail(null, "The booking message is empty");
@@ -450,6 +448,31 @@ async function sendBookingLink(contact: ContactRow, campaign: CampaignRow, stati
 type PersonWithCompany = { person: typeof people.$inferSelect; company: typeof companies.$inferSelect | null };
 
 /** A WhatsApp step's text: merge fields from the Person and company, plus {{agentName}} and {{bookingLink}}. */
+/**
+ * The lead's booking code, given the first time a link is sent: random, tried
+ * again past a collision, and a character longer after a few, so the space
+ * never runs out.
+ */
+async function bookingCodeFor(contact: ContactRow): Promise<string> {
+  if (contact.aiBookingCode) return contact.aiBookingCode;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const code = newBookingCode(BOOKING_CODE_LENGTH + Math.floor(attempt / 4));
+    try {
+      const [row] = await db
+        .update(callCampaignContacts)
+        .set({ aiBookingCode: sql`coalesce(${callCampaignContacts.aiBookingCode}, ${code})` })
+        .where(eq(callCampaignContacts.id, contact.id))
+        .returning({ code: callCampaignContacts.aiBookingCode });
+      if (!row?.code) throw new Error("The lead is gone");
+      contact.aiBookingCode = row.code;
+      return row.code;
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+    }
+  }
+  throw new Error("Could not find a free booking code");
+}
+
 function renderMessage(body: string, lead: PersonWithCompany, campaign: CampaignRow, bookingLink: string | null): string {
   const variables = campaignLeadVariables(lead.person, lead.company, {});
   variables.agentName = campaign.aiAgentName?.trim() || DEFAULT_AGENT_NAME;
@@ -647,14 +670,8 @@ async function actForContact(
   let brief = "";
   if (plan.kind === "message") {
     const step = plan.step?.kind === "message" ? plan.step : null;
-    const link = settings.bookingUrl
-      ? bookingLinkFor(settings.bookingUrl, {
-          contactId: contact.id,
-          name: lead.person.fullName ?? null,
-          email: lead.person.email,
-          phone: lead.person.phone,
-        })
-      : null;
+    // A code is given only to a lead whose message carries the link.
+    const link = settings.bookingUrl && step && /\{\{\s*bookingLink\s*\}\}/i.test(step.body) ? bookingLinkFor(settings.bookingUrl, await bookingCodeFor(contact)) : null;
     body = step ? renderMessage(step.body, lead, campaign, link) : "";
     if (!body) return fail("The message is empty for this lead");
   } else {

@@ -8,6 +8,7 @@ import {
   afterMessage,
   bookingLinkFor,
   calcomSignatureValid,
+  newBookingCode,
   callResultFor,
   CALLBACK_RETRY_MS,
   CHASE_GRACE_MS,
@@ -347,14 +348,19 @@ describe("withinCallingHours", () => {
 });
 
 describe("Cal.com", () => {
-  test("the booking link carries the lead and its contact id", () => {
-    const link = bookingLinkFor("https://cal.com/acme/30min", { contactId: "c1", name: "Asha Rao", email: "asha@example.com", phone: "+919876543210" });
-    expect(link).toBe("https://cal.com/acme/30min?metadata[agentsdrContact]=c1&name=Asha+Rao&email=asha%40example.com&attendeePhoneNumber=%2B919876543210");
-    expect(bookingLinkFor("https://cal.com/acme/30min?month=2026-11", { contactId: "c1", name: null, email: null, phone: null })).toBe(
-      "https://cal.com/acme/30min?month=2026-11&metadata[agentsdrContact]=c1",
-    );
-    expect(bookingLinkFor("not a url", { contactId: "c1", name: null, email: null, phone: null })).toBeNull();
-    expect(bookingLinkFor("javascript:alert(1)", { contactId: "c1", name: null, email: null, phone: null })).toBeNull();
+  test("the booking link carries only the lead's booking code", () => {
+    expect(bookingLinkFor("https://cal.com/acme/30min", "k7p2")).toBe("https://cal.com/acme/30min?metadata[c]=k7p2");
+    expect(bookingLinkFor("https://cal.com/acme/30min?month=2026-11", "k7p2")).toBe("https://cal.com/acme/30min?month=2026-11&metadata[c]=k7p2");
+    expect(bookingLinkFor("not a url", "k7p2")).toBeNull();
+    expect(bookingLinkFor("javascript:alert(1)", "k7p2")).toBeNull();
+  });
+
+  test("booking codes are short and skip look-alike characters", () => {
+    let i = 0;
+    const steps = [0, 0.5, 0.99, 0.2];
+    expect(newBookingCode(4, () => steps[i++ % steps.length]!)).toBe("as9g");
+    for (let n = 0; n < 200; n += 1) expect(newBookingCode()).toMatch(/^[a-hj-km-np-z2-9]{4}$/);
+    expect(newBookingCode(5)).toHaveLength(5);
   });
 
   test("the signature is the hex HMAC-SHA256 of the raw body", () => {
@@ -384,10 +390,17 @@ describe("Cal.com", () => {
       kind: "booked",
       uid: "bk_1",
       startTime: new Date("2026-10-29T06:30:00Z"),
+      bookingCode: null,
       contactId,
       emails: ["asha@example.com"],
       phones: ["+919876543210"],
     });
+  });
+
+  test("a booking names its lead by the link's booking code", () => {
+    const event = parseCalcomEvent({ triggerEvent: "BOOKING_CREATED", payload: { metadata: { c: "K7P2" } } });
+    expect(event).toMatchObject({ bookingCode: "k7p2", contactId: null });
+    expect(parseCalcomEvent({ triggerEvent: "BOOKING_CREATED", payload: { metadata: { c: "no spaces!" } } })?.bookingCode).toBeNull();
   });
 
   test("rescheduled is a booking, cancelled a cancellation, the rest ignored", () => {

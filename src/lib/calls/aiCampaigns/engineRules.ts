@@ -364,18 +364,33 @@ export function dailyCallLimit(input: {
 
 // --- Cal.com -----------------------------------------------------------------------
 
-/** The metadata key a booking link carries, so the booking names its lead. */
-export const CALCOM_CONTACT_METADATA = "agentsdrContact";
+/**
+ * The metadata key a booking link carries (`metadata[c]=k7p2`): the lead's
+ * booking code (call_campaign_contacts.ai_booking_code), so the booking names
+ * its lead. One letter and a short code keep the link short, and the link
+ * carries nothing else about the person: it may be forwarded.
+ */
+export const CALCOM_BOOKING_METADATA = "c";
+/** Links sent before the booking code carried the contact's UUID under this key; their bookings still match. */
+export const LEGACY_CALCOM_CONTACT_METADATA = "agentsdrContact";
+
+/** Booking codes: lowercase letters and digits without look-alikes (0/o, 1/l/i). */
+export const BOOKING_CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+export const BOOKING_CODE_LENGTH = 4;
+const BOOKING_CODE_PATTERN = /^[a-z0-9]{3,12}$/;
+
+/** A random booking code of `length` characters (`random` for the tests). */
+export function newBookingCode(length = BOOKING_CODE_LENGTH, random: () => number = Math.random): string {
+  let code = "";
+  for (let i = 0; i < length; i += 1) code += BOOKING_CODE_ALPHABET[Math.floor(random() * BOOKING_CODE_ALPHABET.length)];
+  return code;
+}
 
 /**
- * The campaign's booking page with the lead prefilled and their contact id
- * in the booking's metadata (Cal.com: `metadata[key]=value`, `name`,
- * `email`, `attendeePhoneNumber`). Null if the URL is not http(s).
+ * The campaign's booking page with the lead's booking code in the booking's
+ * metadata (Cal.com: `metadata[key]=value`). Null if the URL is not http(s).
  */
-export function bookingLinkFor(
-  bookingUrl: string,
-  lead: { contactId: string; name: string | null; email: string | null; phone: string | null },
-): string | null {
+export function bookingLinkFor(bookingUrl: string, bookingCode: string): string | null {
   let url: URL;
   try {
     url = new URL(bookingUrl.trim());
@@ -383,10 +398,7 @@ export function bookingLinkFor(
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  url.searchParams.set(`metadata[${CALCOM_CONTACT_METADATA}]`, lead.contactId);
-  if (lead.name?.trim()) url.searchParams.set("name", lead.name.trim());
-  if (lead.email?.trim()) url.searchParams.set("email", lead.email.trim());
-  if (lead.phone?.trim()) url.searchParams.set("attendeePhoneNumber", lead.phone.trim());
+  url.searchParams.set(`metadata[${CALCOM_BOOKING_METADATA}]`, bookingCode);
   // Cal.com reads the brackets either way; unescaped they read better in a WhatsApp message.
   return url.toString().replace(/metadata%5B([A-Za-z]+)%5D=/g, "metadata[$1]=");
 }
@@ -405,7 +417,9 @@ export type CalcomBookingEvent = {
   /** Cal.com's booking uid. */
   uid: string | null;
   startTime: Date | null;
-  /** The lead's call_campaign_contacts id from the link's metadata, when it is a UUID. */
+  /** The lead's booking code from the link's metadata. */
+  bookingCode: string | null;
+  /** The lead's call_campaign_contacts id, from a link sent before booking codes. */
   contactId: string | null;
   emails: string[];
   phones: string[];
@@ -439,7 +453,8 @@ export function parseCalcomEvent(body: unknown): CalcomBookingEvent | null {
   const responses = record(payload.responses) ?? {};
   const attendees = Array.isArray(payload.attendees) ? payload.attendees.map(record).filter((a): a is Record<string, unknown> => a !== null) : [];
 
-  const contact = text(metadata[CALCOM_CONTACT_METADATA]);
+  const code = text(metadata[CALCOM_BOOKING_METADATA])?.toLowerCase() ?? null;
+  const contact = text(metadata[LEGACY_CALCOM_CONTACT_METADATA]);
   const emails = new Set<string>();
   const phones = new Set<string>();
   for (const value of [responses.email, ...attendees.map((a) => a.email)]) {
@@ -456,6 +471,7 @@ export function parseCalcomEvent(body: unknown): CalcomBookingEvent | null {
     kind,
     uid: text(payload.uid),
     startTime: Number.isFinite(startMs) ? new Date(startMs) : null,
+    bookingCode: code && BOOKING_CODE_PATTERN.test(code) ? code : null,
     contactId: contact && UUID_PATTERN.test(contact) ? contact : null,
     emails: [...emails],
     phones: [...phones],

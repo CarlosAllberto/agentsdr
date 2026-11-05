@@ -266,6 +266,11 @@ export const callCampaignContacts = pgTable(
     /** Why it stopped or failed, or the last error, for the person reading the list. */
     aiNote: text("ai_note"),
     aiBookedAt: timestamp("ai_booked_at", { withTimezone: true }),
+    /**
+     * The short code its booking link carries (`metadata[c]`), given when a link
+     * is first sent; unique across organizations. scripts/add-ai-booking-code.ts.
+     */
+    aiBookingCode: text("ai_booking_code"),
     /** Extra instructions for calls to this one lead, on top of the campaign's. scripts/add-ai-lead-instructions.ts. */
     aiInstructions: text("ai_instructions"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -283,6 +288,7 @@ export const callCampaignContacts = pgTable(
       name: "call_campaign_contacts_ai_station_fk",
     }).onDelete("set null"),
     index("call_campaign_contacts_ai_due_idx").on(table.aiStatus, table.aiNextAt).where(sql`${table.aiStatus} IS NOT NULL`),
+    uniqueIndex("call_campaign_contacts_ai_booking_code_uq").on(table.aiBookingCode).where(sql`${table.aiBookingCode} IS NOT NULL`),
     foreignKey({
       columns: [table.personId],
       foreignColumns: [people.id],
