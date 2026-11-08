@@ -19,11 +19,11 @@ async function Numbers() {
 export default function WhatsappAccountsPage() {
   return (
     <RequiresPlatform
-      platform="unipile"
+      platform="zernio"
       fallback={
-        <SettingsPage title="WhatsApp accounts" description="The WhatsApp numbers messaging and calling run from, linked through Unipile.">
+        <SettingsPage title="WhatsApp accounts" description="The WhatsApp numbers messaging and calling run from, linked through Zernio.">
           {/* The gate's prompt, under the page header the client component would have supplied. */}
-          <PlatformConnectPrompt platform="unipile" settingsHref="/settings/whatsapp-connection" guideHref={docsPageUrl("whatsapp/accounts")} />
+          <PlatformConnectPrompt platform="zernio" settingsHref="/settings/whatsapp-connection" guideHref={docsPageUrl("whatsapp/accounts")} />
         </SettingsPage>
       }
     >

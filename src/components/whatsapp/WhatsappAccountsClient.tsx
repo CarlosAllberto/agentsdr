@@ -99,7 +99,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
     try {
       const response = await syncWhatsappAccounts();
       setAccounts(response.accounts);
-      setNotice(response.accounts.length ? "Synced from Unipile." : "Synced — Unipile has no WhatsApp number linked yet.");
+      setNotice(response.accounts.length ? "Synced from Zernio." : "Synced — Zernio has no WhatsApp number connected yet.");
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -152,14 +152,14 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
   const syncAction = (
     <Button.Root variant="primary" mode="filled" size="small" disabled={syncing} onClick={() => void sync()}>
       <Button.Icon as={RiRefreshLine} className={cn(syncing && "animate-spin")} />
-      {syncing ? "Syncing…" : "Sync from Unipile"}
+      {syncing ? "Syncing…" : "Sync from Zernio"}
     </Button.Root>
   );
 
   return (
     <SettingsPage
       title="WhatsApp accounts"
-      description="The numbers AgentSDR messages from, linked in Unipile. Calls are placed from web.whatsapp.com by the recorder extension."
+      description="The numbers AgentSDR messages from, connected in Zernio. Calls are placed from web.whatsapp.com by the recorder extension."
       actions={syncAction}
     >
       <div className="space-y-5">
@@ -187,7 +187,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
               <EmptyState
                 icon={WhatsappLogo}
                 title="No WhatsApp numbers yet"
-                description="In the Unipile dashboard choose Accounts → Connect → WhatsApp and scan the QR with the phone the rep calls from. Then sync here."
+                description="In Zernio, connect your WhatsApp Business number (Meta Embedded Signup). Then sync here."
                 action={syncAction}
               />
             </FramePanel>
@@ -200,7 +200,7 @@ export function WhatsappAccountsClient({ rules }: { rules: WhatsappNumberRules }
                 icon={RiErrorWarningLine}
                 label="Needs attention"
                 value={String(attention)}
-                context={attention === 0 ? "Every number can message" : "Relink these in Unipile, then sync"}
+                context={attention === 0 ? "Every number can message" : "Reconnect these in Zernio, then sync"}
                 hint="Numbers that are disconnected, need credentials, or report an error. A banned number also loses its calling."
               />
               <KpiCell

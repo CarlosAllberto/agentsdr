@@ -15,6 +15,7 @@ export async function verifyPlatformCredentials<K extends PlatformKey>(
   credentials: PlatformCredentials[K],
 ): Promise<void> {
   if (key === "unipile") return verifyUnipile(credentials as PlatformCredentials["unipile"]);
+  if (key === "zernio") return verifyZernio(credentials as PlatformCredentials["zernio"]);
   if (key === "google") return verifyGoogle(credentials as PlatformCredentials["google"]);
   if (key === "r2") return verifyR2(credentials as PlatformCredentials["r2"]);
   if (key === "gologin") return verifyGoLogin(credentials as PlatformCredentials["gologin"]);
@@ -37,6 +38,20 @@ async function verifyUnipile({ baseUrl, apiKey }: PlatformCredentials["unipile"]
     throw new Error("Unipile rejected the access token");
   }
   if (!response.ok) throw new Error(`Unipile answered ${response.status}`);
+}
+
+async function verifyZernio({ apiKey }: PlatformCredentials["zernio"]): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch("https://zernio.com/api/v1/accounts?platform=whatsapp&limit=1", {
+      headers: { Authorization: `Bearer ${apiKey}`, accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new Error("Could not reach Zernio");
+  }
+  if (response.status === 401 || response.status === 403) throw new Error("Zernio rejected the API key");
+  if (!response.ok) throw new Error(`Zernio answered ${response.status}`);
 }
 
 async function verifyGoLogin({ apiToken }: PlatformCredentials["gologin"]): Promise<void> {

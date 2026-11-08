@@ -24,7 +24,7 @@ export function SenderPicker({
   if (accounts.length === 0) {
     return (
       <p className="rounded-xl bg-warning-lighter p-3 text-paragraph-sm text-warning-dark">
-        No WhatsApp numbers yet. Link one in Unipile, then use Sync from Unipile on the Accounts page. You can still save this campaign paused.
+        No WhatsApp numbers yet. Connect one in Zernio, then use Sync from Zernio on the Accounts page. You can still save this campaign paused.
       </p>
     );
   }

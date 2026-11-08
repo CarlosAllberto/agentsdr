@@ -58,7 +58,7 @@ export const whatsappAccounts = pgTable(
      * then "station:<station id>", never a real Unipile id).
      * scripts/add-ai-calling-campaigns.ts.
      */
-    provider: text("provider").notNull().default("unipile").$type<"unipile" | "station">(),
+    provider: text("provider").notNull().default("unipile").$type<"unipile" | "zernio" | "station">(),
     stationId: uuid("station_id"),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -68,7 +68,7 @@ export const whatsappAccounts = pgTable(
     index("whatsapp_accounts_organization_idx").on(table.organizationId),
     unique("whatsapp_accounts_unipile_account_uq").on(table.unipileAccountId),
     uniqueIndex("whatsapp_accounts_station_uq").on(table.stationId).where(sql`${table.stationId} IS NOT NULL`),
-    check("whatsapp_accounts_provider_chk", sql`${table.provider} IN ('unipile', 'station') AND ((${table.provider} = 'station') = (${table.stationId} IS NOT NULL))`),
+    check("whatsapp_accounts_provider_chk", sql`${table.provider} IN ('unipile', 'zernio', 'station') AND ((${table.provider} = 'station') = (${table.stationId} IS NOT NULL))`),
     check(
       "whatsapp_accounts_status_chk",
       sql`${table.status} IN ('connected', 'disconnected', 'credentials', 'error')`,
