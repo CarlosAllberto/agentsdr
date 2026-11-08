@@ -26,6 +26,13 @@ import { mayCreateAccount, mayCreateOrganization } from "./signup";
 
 const baseURL = process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_APP_URL;
 
+/**
+ * The desktop app is one person on one computer with no mail service, so it
+ * sets AUTH_EMAIL_VERIFICATION=off: sign-up signs straight in. Every server
+ * deployment keeps verification on.
+ */
+const emailVerification = !["off", "false", "0"].includes(process.env.AUTH_EMAIL_VERIFICATION?.trim().toLowerCase() ?? "");
+
 const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 
 /** The organization a fresh session opens in: the one the user joined first. */
@@ -51,7 +58,7 @@ export const auth = betterAuth({
 
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: true,
+    requireEmailVerification: emailVerification,
     minPasswordLength: 8,
     revokeSessionsOnPasswordReset: true,
     // Not awaited: Better Auth's docs warn that waiting on delivery leaks,
@@ -70,7 +77,7 @@ export const auth = betterAuth({
   },
 
   emailVerification: {
-    sendOnSignUp: true,
+    sendOnSignUp: emailVerification,
     autoSignInAfterVerification: true,
     sendVerificationEmail: async ({ user, url }) => {
       void sendAuthEmail(

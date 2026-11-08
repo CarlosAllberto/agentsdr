@@ -362,6 +362,16 @@ Adding a `db` import to one of the client-safe modules breaks the build with
 sibling instead. A `import type` from a query module is always safe; it
 erases at compile time.
 
+## The desktop app
+
+`desktop/` (its own package, ESM, excluded from the root tsconfig and lint)
+wraps AgentSDR in Electron: embedded PostgreSQL, the standalone server run
+by Electron's Node, a tray so the scheduler keeps running. See
+`desktop/README.md`. It sets `AUTH_EMAIL_VERIFICATION=off` (one person, no
+mail service); every server deployment keeps verification on. A desktop app
+gets no webhooks, so anything that relies on one needs a polling job there
+(Zernio WhatsApp replies: `whatsapp-zernio-poll`).
+
 ## Work on `main`, commit freely, push only when asked
 
 Commit directly to `main`. Do not open a feature branch, and do not open a
@@ -661,8 +671,8 @@ message, and free text only within 24 h of the lead's last message. "Sync"
 reads Zernio only (`SYNCED_WHATSAPP_PROVIDERS`); a Unipile WhatsApp number
 synced before the move still sends through Unipile. A Zernio account id is
 stored in `unipile_account_id` and a conversation id in `unipile_chat_id`
-(the columns predate a second provider). Zernio replies are not ingested yet:
-inbound arrives by polling, added with the desktop app.
+(the columns predate a second provider). Zernio replies are read by polling
+(`src/lib/whatsapp/zernioPoll.ts`, job `whatsapp-zernio-poll`, every minute): a desktop app gets no webhooks.
 
 Unipile posts every messaging event, LinkedIn and WhatsApp alike, to one
 webhook, `/api/webhooks/unipile-message`, which only routes by `account_type`
