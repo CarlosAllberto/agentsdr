@@ -486,7 +486,7 @@ export function WhatsappMessagesClient({ initialChatId = null }: { initialChatId
                     <span
                       title={selectedAccount?.unipileAccountId.startsWith("station:")
                         ? "Sent from the calling number's WhatsApp Web by the call worker, between its calls. New chats wait 24 h after a number is linked, and messages are spaced 10 s apart."
-                        : "Sent through Unipile. New chats wait 24 h after a number is linked, and messages are spaced 10 s apart."}
+                        : "Sent through Zernio. New chats wait 24 h after a number is linked, and messages are spaced 10 s apart."}
                     >
                       <ChannelTag channel="whatsapp" label={selectedAccount ? `from ${accountLabel(selectedAccount)}` : "WhatsApp"} />
                     </span>

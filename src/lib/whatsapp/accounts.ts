@@ -1,8 +1,8 @@
 import "server-only";
 
-import { and, asc, eq, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, ne, notInArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { WHATSAPP_PROVIDERS, type WhatsappProvider } from "./providers";
+import { SYNCED_WHATSAPP_PROVIDERS, type WhatsappProvider } from "./providers";
 import type { WhatsappAccountSummary } from "./contract";
 import { WhatsappApiError } from "./errors";
 import { warmUpEndsAt } from "./guardrails";
@@ -65,7 +65,7 @@ export async function listWhatsappAccounts(): Promise<WhatsappAccountSummary[]> 
  * none is.
  */
 export async function syncWhatsappAccounts(): Promise<WhatsappAccountSummary[]> {
-  for (const provider of WHATSAPP_PROVIDERS) await syncProviderAccounts(provider);
+  for (const provider of SYNCED_WHATSAPP_PROVIDERS) await syncProviderAccounts(provider);
   await ensureDefaultAccount();
   return listWhatsappAccounts();
 }
@@ -117,8 +117,8 @@ async function syncProviderAccounts(provider: WhatsappProvider): Promise<void> {
 }
 
 /**
- * When no account is the default, the oldest connected Unipile number (else
- * the oldest Unipile number) becomes it. A calling station's number is the
+ * When no account is the default, the oldest connected provider number
+ * (Zernio or Unipile; else the oldest such number) becomes it. A calling station's number is the
  * default only when someone chooses it: it belongs to AI calling first.
  */
 async function ensureDefaultAccount(): Promise<void> {
@@ -133,7 +133,7 @@ async function ensureDefaultAccount(): Promise<void> {
     const [candidate] = await tx
       .select({ id: whatsappAccounts.id })
       .from(whatsappAccounts)
-      .where(and(inOrg(whatsappAccounts), eq(whatsappAccounts.provider, "unipile")))
+      .where(and(inOrg(whatsappAccounts), ne(whatsappAccounts.provider, "station")))
       .orderBy(sql`(${whatsappAccounts.status} = 'connected') desc`, asc(whatsappAccounts.createdAt), asc(whatsappAccounts.id))
       .limit(1);
     if (!candidate) return;

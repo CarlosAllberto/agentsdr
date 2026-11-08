@@ -16,7 +16,7 @@
 
 import { docsPageUrl } from "@/lib/support";
 
-export type PlatformKey = "unipile" | "google" | "r2" | "gologin" | "calcom" | "langfuse";
+export type PlatformKey = "unipile" | "zernio" | "google" | "r2" | "gologin" | "calcom" | "langfuse";
 
 /** The decrypted credential object stored for each platform. */
 export type PlatformCredentials = {
@@ -29,6 +29,18 @@ export type PlatformCredentials = {
      * every webhook. Generated on first save when left empty.
      */
     notifySecret: string;
+  };
+  zernio: {
+    /** A Zernio API key (sk_…), sent as a Bearer token to https://zernio.com/api. */
+    apiKey: string;
+    /**
+     * The approved template that opens a chat with a lead. Empty: the first
+     * message goes as a Meta Direct Send utility message (no template), which
+     * only eligible accounts may send.
+     */
+    firstContactTemplate: string;
+    /** That template's language code, e.g. pt_BR. */
+    templateLanguage: string;
   };
   google: {
     /** The service account's email, …@….iam.gserviceaccount.com. */
@@ -158,6 +170,50 @@ export const PLATFORM_INTEGRATIONS: readonly PlatformIntegration[] = [
         inputType: "password",
         required: false,
         secret: true,
+      },
+    ],
+  },
+  {
+    key: "zernio",
+    name: "Zernio",
+    description: "Connects WhatsApp Business numbers through Meta's official WhatsApp API for messaging.",
+    enables: ["WhatsApp messaging through the official API"],
+    websiteUrl: "https://zernio.com",
+    iconUrl: "https://www.google.com/s2/favicons?domain=zernio.com&sz=64",
+    docsUrl: "https://docs.zernio.com/platforms/whatsapp",
+    setupSteps: [
+      "Sign in to Zernio and connect your WhatsApp Business number there (Meta's Embedded Signup).",
+      "Create an approved message template for the first message to a lead: Meta only lets a business start a chat with one.",
+      "Open Settings → API keys, create a key and copy it.",
+      "Paste it below and save, then press Sync on Settings → WhatsApp → Accounts.",
+    ],
+    fields: [
+      {
+        key: "apiKey",
+        label: "API key",
+        placeholder: "sk_…",
+        help: "Zernio → Settings → API keys → Create. Copy it right away.",
+        inputType: "password",
+        required: true,
+        secret: true,
+      },
+      {
+        key: "firstContactTemplate",
+        label: "First-message template",
+        placeholder: "agentsdr_first_contact",
+        help: "The name of an approved WhatsApp template. If its body has one variable ({{1}}), the message AgentSDR writes fills it; with none, the template is sent as approved. Leave empty to send the first message as a Direct Send utility message, which Meta allows only for eligible accounts and never for marketing.",
+        inputType: "text",
+        required: false,
+        secret: false,
+      },
+      {
+        key: "templateLanguage",
+        label: "Template language",
+        placeholder: "pt_BR",
+        help: "The language code the template was approved in, as Meta shows it (pt_BR, en_US, es_ES). Defaults to pt_BR.",
+        inputType: "text",
+        required: false,
+        secret: false,
       },
     ],
   },
@@ -397,6 +453,7 @@ export const OPENROUTER_ICON_URL = "/Integrations - Icon/openrouter.svg";
 export const PLATFORM_SETTINGS_HREF: Record<PlatformKey, string> = {
   google: "/settings/email-connection",
   unipile: "/settings/linkedin-connection",
+  zernio: "/settings/whatsapp-connection",
   r2: "/settings/whatsapp-connection",
   gologin: "/settings/whatsapp-connection",
   calcom: "/settings/whatsapp-connection",
@@ -407,6 +464,7 @@ export const PLATFORM_SETTINGS_HREF: Record<PlatformKey, string> = {
 export const PLATFORM_SETTINGS_LABEL: Record<PlatformKey, string> = {
   google: "Settings → Email → Connection",
   unipile: "Settings → LinkedIn → Connection",
+  zernio: "Settings → WhatsApp → Integrations",
   r2: "Settings → WhatsApp → Integrations",
   gologin: "Settings → WhatsApp → Integrations",
   calcom: "Settings → WhatsApp → Integrations",

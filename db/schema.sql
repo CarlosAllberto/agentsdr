@@ -2615,7 +2615,7 @@ CREATE TABLE public.whatsapp_accounts (
     new_chats_per_day integer,
     provider text DEFAULT 'unipile'::text NOT NULL,
     station_id uuid,
-    CONSTRAINT whatsapp_accounts_provider_chk CHECK (((provider = ANY (ARRAY['unipile'::text, 'station'::text])) AND ((provider = 'station'::text) = (station_id IS NOT NULL)))),
+    CONSTRAINT whatsapp_accounts_provider_chk CHECK (((provider = ANY (ARRAY['unipile'::text, 'zernio'::text, 'station'::text])) AND ((provider = 'station'::text) = (station_id IS NOT NULL)))),
     CONSTRAINT whatsapp_accounts_status_chk CHECK ((status = ANY (ARRAY['connected'::text, 'disconnected'::text, 'credentials'::text, 'error'::text])))
 );
 

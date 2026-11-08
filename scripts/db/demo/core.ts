@@ -247,6 +247,7 @@ function freePortraits(kind: "men" | "women"): number[] {
 // Langfuse stays unconnected: the demo never traces, and the AI provider page shows how to connect it.
 const PLACEHOLDER_CREDENTIALS: Record<Exclude<PlatformKey, "langfuse">, Record<string, string>> = {
   unipile: { baseUrl: "https://api.unipile.example", apiKey: "demo-unipile-key", notifySecret: "demo-notify-secret" },
+  zernio: { apiKey: "demo-zernio-key", firstContactTemplate: "", templateLanguage: "pt_BR" },
   google: {
     clientEmail: "agentsdr-sender@northwind-demo.iam.gserviceaccount.example",
     privateKey: "-----BEGIN PRIVATE KEY-----\nDEMO\n-----END PRIVATE KEY-----\n",

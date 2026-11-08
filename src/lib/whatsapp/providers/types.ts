@@ -6,7 +6,7 @@ import type { UnipileChatRecord, UnipileMessageRecord } from "../parse";
  * station ("station") is not one of them: its messages go through the
  * station's worker (stationMessaging.ts), never through a provider API.
  */
-export type WhatsappProviderKey = "unipile";
+export type WhatsappProviderKey = "unipile" | "zernio";
 
 /** A number as the provider lists it. */
 export type ProviderWhatsappAccount = {

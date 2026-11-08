@@ -652,6 +652,18 @@ an interface with one implementation per messaging provider. A calling
 station (`provider = 'station'`) is not a provider and never reaches it. A
 new provider is a new file there plus its key in the registry.
 
+**Zernio is the WhatsApp provider; Unipile is LinkedIn only.** Zernio
+(`src/services/zernio.whatsapp.ts`, platform integration `zernio`) runs on
+Meta's official WhatsApp Business API, so a chat can only be opened with an
+approved template (the integration's `firstContactTemplate`; its one body
+variable takes the message text) or, with none set, a Direct Send utility
+message, and free text only within 24 h of the lead's last message. "Sync"
+reads Zernio only (`SYNCED_WHATSAPP_PROVIDERS`); a Unipile WhatsApp number
+synced before the move still sends through Unipile. A Zernio account id is
+stored in `unipile_account_id` and a conversation id in `unipile_chat_id`
+(the columns predate a second provider). Zernio replies are not ingested yet:
+inbound arrives by polling, added with the desktop app.
+
 Unipile posts every messaging event, LinkedIn and WhatsApp alike, to one
 webhook, `/api/webhooks/unipile-message`, which only routes by `account_type`
 to the WhatsApp handler (`/api/webhooks/whatsapp-message`) or, for a LinkedIn

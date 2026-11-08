@@ -83,7 +83,7 @@ export async function runWhatsappCampaignTick(
 
 /** Returns false when the organization was skipped. */
 async function tickOrganization(result: WhatsappCampaignTickResult, now: Date, send: SendFunction): Promise<boolean> {
-  if (!(await isPlatformConnected("unipile"))) return false;
+  if (!(await isPlatformConnected("zernio"))) return false;
   const rules = await channelRules("whatsapp");
   if (!withinCampaignSendingHours(rules.sendingHours, now)) return false;
 

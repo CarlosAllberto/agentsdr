@@ -363,7 +363,7 @@ async function chooseAccount(accountId: string | undefined, phone: string): Prom
     .limit(1);
   if (existing) return existing;
   const account = await getDefaultWhatsappAccountRow();
-  if (!account) throw new WhatsappSendRefusedError("No WhatsApp number is linked. Link one in Unipile, then sync the accounts.", 409, null, "no_number");
+  if (!account) throw new WhatsappSendRefusedError("No WhatsApp number is linked. Connect one in Zernio, then sync the accounts.", 409, null, "no_number");
   return { account, chat: null };
 }
 

@@ -310,6 +310,14 @@ function normalize<K extends PlatformKey>(key: K, raw: Record<string, string>): 
     };
     return value as PlatformCredentials[K];
   }
+  if (key === "zernio") {
+    const value: PlatformCredentials["zernio"] = {
+      apiKey: text("apiKey"),
+      firstContactTemplate: text("firstContactTemplate"),
+      templateLanguage: text("templateLanguage") || "pt_BR",
+    };
+    return value as PlatformCredentials[K];
+  }
   if (key === "gologin") {
     const value: PlatformCredentials["gologin"] = { apiToken: text("apiToken") };
     return value as PlatformCredentials[K];
