@@ -11,13 +11,8 @@ import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { callCampaignContacts, callCampaigns, callSessions } from "@/lib/calls/schema";
 import { logCallMessage } from "@/lib/calls/campaigns";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
-import {
-  findUnipileWhatsappChat,
-  sendUnipileWhatsappMessage,
-  startUnipileWhatsappChat,
-  unipileErrorStatus,
-  whatsappProviderId,
-} from "@/services/unipile.whatsapp";
+import { whatsappProviderId } from "@/services/unipile.whatsapp";
+import { getWhatsappProvider, type WhatsappProvider } from "./providers";
 import type { SendWhatsappRequest, SendWhatsappResponse } from "./contract";
 import {
   getDefaultWhatsappAccountRow,
@@ -112,14 +107,16 @@ export async function performWhatsappSend(target: SendTarget): Promise<SendResul
     throw new WhatsappSendRefusedError(`The WhatsApp number ${account.name ?? account.phone ?? ""} is ${account.status}, not connected`.replace(/\s+/g, " "), 409, null, "not_connected");
   }
 
-  // Which chat: the stored one, else Unipile's existing chat with the
+  const provider = getWhatsappProvider(account.provider);
+
+  // Which chat: the stored one, else the provider's existing chat with the
   // number, else a new chat.
   let chat = target.chat && !isPendingChatId(target.chat.unipileChatId) ? target.chat : null;
   let unipileChatId = chat?.unipileChatId ?? target.unipileChatId ?? null;
   const phone = chat?.phone ?? target.phone;
   if (!chat && !unipileChatId && phone) chat = await storedChatWithPhone(account.id, phone);
   unipileChatId = chat?.unipileChatId ?? unipileChatId;
-  if (!unipileChatId && phone) unipileChatId = await findUnipileWhatsappChat(account.unipileAccountId, phone);
+  if (!unipileChatId && phone) unipileChatId = await provider.findChat(account.unipileAccountId, phone);
   if (!unipileChatId && !phone) throw new WhatsappSendRefusedError("There is no chat or number to send to", 400, null, "no_target");
   const isNewChat = !unipileChatId;
 
@@ -214,30 +211,29 @@ export async function performWhatsappSend(target: SendTarget): Promise<SendResul
   let unipileResult: { chatId: string | null; messageId: string | null };
   try {
     unipileResult = isNewChat
-      ? await startUnipileWhatsappChat(account.unipileAccountId, phone!, text)
-      : { chatId: unipileChatId, ...(await sendUnipileWhatsappMessage(unipileChatId!, text)) };
+      ? await provider.startChat(account.unipileAccountId, phone!, text)
+      : { chatId: unipileChatId, ...(await provider.sendMessage(account.unipileAccountId, unipileChatId!, text)) };
   } catch (error) {
     await db.delete(whatsappMessages).where(and(messageInOrg(), eq(whatsappMessages.id, reserved.message.id)));
     if (isNewChat) await db.delete(whatsappChats).where(and(chatInOrg(), eq(whatsappChats.id, reserved.chat.id)));
     if (isPlatformNotConnectedError(error)) throw error;
-    throw unipileSendError(error);
+    throw providerSendError(provider, error);
   }
 
-  return finalizeSend(account, reserved, isNewChat, phone, unipileResult);
+  return finalizeSend(provider, account, reserved, isNewChat, phone, unipileResult);
 }
 
-function unipileSendError(error: unknown): Error {
-  const status = unipileErrorStatus(error);
-  const detail = (error as { body?: { detail?: unknown; title?: unknown } } | null)?.body;
-  const reason = typeof detail?.detail === "string" ? detail.detail : typeof detail?.title === "string" ? detail.title : null;
+function providerSendError(provider: WhatsappProvider, error: unknown): Error {
+  const status = provider.errorStatus(error);
+  const reason = provider.errorReason(error);
   if (status === 429) return new WhatsappSendRefusedError(`WhatsApp is rate-limiting this number${reason ? `: ${reason}` : ""}. Try again later.`, 429, 60, "rate_limited");
   if (status && status >= 400 && status < 500) {
-    // 401/403 is Unipile refusing the account or key, not this message.
+    // 401/403 is the provider refusing the account or key, not this message.
     const cause = status === 401 || status === 403 ? "unauthorized" : "rejected";
     return new WhatsappSendRefusedError(`WhatsApp did not accept the message${reason ? `: ${reason}` : ` (${status})`}`, 400, null, cause);
   }
-  console.error("Unipile WhatsApp send failed", error);
-  return new WhatsappApiError(502, "WhatsApp (Unipile) could not be reached to send the message. Try again.");
+  console.error(`${provider.label} WhatsApp send failed`, error);
+  return new WhatsappApiError(502, `WhatsApp (${provider.label}) could not be reached to send the message. Try again.`);
 }
 
 /**
@@ -247,6 +243,7 @@ function unipileSendError(error: unknown): Error {
  * its own chat and message. Then AgentSDR's rows merge into those.
  */
 async function finalizeSend(
+  provider: WhatsappProvider,
   account: WhatsappAccountRow,
   reserved: SendResult,
   isNewChat: boolean,
@@ -257,9 +254,9 @@ async function finalizeSend(
   let message = reserved.message;
 
   if (isNewChat) {
-    const unipileChatId = result.chatId ?? (phone ? await findUnipileWhatsappChat(account.unipileAccountId, phone) : null);
+    const unipileChatId = result.chatId ?? (phone ? await provider.findChat(account.unipileAccountId, phone) : null);
     if (unipileChatId) chat = await settleNewChat(account, chat, message, unipileChatId);
-    else console.warn(`[whatsapp/send] Unipile named no chat for new chat ${chat.id}; the first echo will adopt it`);
+    else console.warn(`[whatsapp/send] ${provider.label} named no chat for new chat ${chat.id}; the first echo will adopt it`);
     if (chat.id !== message.chatId) message = { ...message, chatId: chat.id };
   }
 

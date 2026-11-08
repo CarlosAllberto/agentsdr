@@ -8,7 +8,7 @@ import type { CrmExecutor } from "@/lib/crm/repository";
 import { companies, people } from "@/lib/leads/schema";
 import { personCompanyName } from "@/lib/leads/companyName";
 import { pickRepresentativeRecord } from "@/lib/calls/leadStageRules";
-import { listUnipileWhatsappChats, listUnipileWhatsappMessages } from "@/services/unipile.whatsapp";
+import { getWhatsappProvider, type ProviderChatRecord } from "./providers";
 import type {
   BackfillWhatsappAccountResponse,
   ListWhatsappChatsResponse,
@@ -34,8 +34,6 @@ import { WhatsappApiError } from "./errors";
 import {
   decideIngest,
   ECHO_MATCH_WINDOW_MS,
-  mapUnipileChat,
-  mapUnipileMessage,
   messagePreview,
   parseWhatsappWebhook,
   pickPendingSend,
@@ -799,14 +797,13 @@ export async function backfillWhatsappAccount(accountId: string): Promise<Backfi
   if (account.provider === "station") throw new WhatsappApiError(409, "A calling number's messages arrive from its WhatsApp Web as they come; there is no history to import");
   if (account.status !== "connected") throw new WhatsappApiError(409, "This WhatsApp number is not connected");
 
-  const chats: NonNullable<ReturnType<typeof mapUnipileChat>>[] = [];
+  const provider = getWhatsappProvider(account.provider);
+  const chats: ProviderChatRecord[] = [];
   let cursor: string | undefined;
   let skippedGroups = 0;
   for (let page = 0; page < BACKFILL_CHAT_PAGES; page += 1) {
-    const response = await listUnipileWhatsappChats(account.unipileAccountId, cursor);
-    for (const item of response.items) {
-      const chat = mapUnipileChat(item);
-      if (!chat) continue;
+    const response = await provider.listChats(account.unipileAccountId, cursor);
+    for (const chat of response.items) {
       if (chat.isGroup) skippedGroups += 1;
       else chats.push(chat);
     }
@@ -827,7 +824,7 @@ export async function backfillWhatsappAccount(accountId: string): Promise<Backfi
   return { importedChats, importedMessages, skippedGroups };
 }
 
-async function backfillChat(account: WhatsappAccountRow, chat: NonNullable<ReturnType<typeof mapUnipileChat>>): Promise<number> {
+async function backfillChat(account: WhatsappAccountRow, chat: ProviderChatRecord): Promise<number> {
   const row = await upsertWhatsappChat({
     accountId: account.id,
     unipileChatId: chat.unipileChatId,
@@ -836,10 +833,8 @@ async function backfillChat(account: WhatsappAccountRow, chat: NonNullable<Retur
     name: chat.name,
     initialUnreadCount: chat.unreadCount,
   });
-  const response = await listUnipileWhatsappMessages(chat.unipileChatId, undefined, BACKFILL_MESSAGES_PER_CHAT);
-  const messages = response.items
-    .map(mapUnipileMessage)
-    .filter((message): message is NonNullable<typeof message> => Boolean(message))
+  const response = await getWhatsappProvider(account.provider).listMessages(account.unipileAccountId, chat.unipileChatId, undefined, BACKFILL_MESSAGES_PER_CHAT);
+  const messages = [...response.items]
     .sort((left, right) => left.sentAt.getTime() - right.sentAt.getTime());
 
   let imported = 0;

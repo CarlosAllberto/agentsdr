@@ -2,7 +2,7 @@ import "server-only";
 
 import { and, asc, eq, notInArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { listUnipileWhatsappAccounts } from "@/services/unipile.whatsapp";
+import { WHATSAPP_PROVIDERS, type WhatsappProvider } from "./providers";
 import type { WhatsappAccountSummary } from "./contract";
 import { WhatsappApiError } from "./errors";
 import { warmUpEndsAt } from "./guardrails";
@@ -58,13 +58,20 @@ export async function listWhatsappAccounts(): Promise<WhatsappAccountSummary[]> 
 }
 
 /**
- * Re-reads the linked numbers from Unipile: upserts each by its Unipile id,
- * stamps connected_at the first time one is seen connected (that starts its
- * new-chat warm-up), marks numbers Unipile no longer lists as disconnected,
- * and makes one account the default when none is.
+ * Re-reads the linked numbers from every messaging provider (providers/):
+ * upserts each by its provider id, stamps connected_at the first time one is
+ * seen connected (that starts its new-chat warm-up), marks numbers a provider
+ * no longer lists as disconnected, and makes one account the default when
+ * none is.
  */
 export async function syncWhatsappAccounts(): Promise<WhatsappAccountSummary[]> {
-  const listed = await listUnipileWhatsappAccounts();
+  for (const provider of WHATSAPP_PROVIDERS) await syncProviderAccounts(provider);
+  await ensureDefaultAccount();
+  return listWhatsappAccounts();
+}
+
+async function syncProviderAccounts(provider: WhatsappProvider): Promise<void> {
+  const listed = await provider.listAccounts();
   const now = new Date();
 
   for (const account of listed) {
@@ -73,7 +80,8 @@ export async function syncWhatsappAccounts(): Promise<WhatsappAccountSummary[]> 
       .insert(whatsappAccounts)
       .values({
         organizationId: currentOrganizationId(),
-        unipileAccountId: account.unipileAccountId,
+        unipileAccountId: account.providerAccountId,
+        provider: provider.key,
         name: account.name,
         phone: account.phone,
         status: account.status,
@@ -82,7 +90,7 @@ export async function syncWhatsappAccounts(): Promise<WhatsappAccountSummary[]> 
       })
       .onConflictDoUpdate({
         target: whatsappAccounts.unipileAccountId,
-        // A Unipile account belongs to one organization; never touch another's row.
+        // A provider account belongs to one organization; never touch another's row.
         setWhere: inOrg(whatsappAccounts),
         set: {
           name: account.name,
@@ -97,18 +105,15 @@ export async function syncWhatsappAccounts(): Promise<WhatsappAccountSummary[]> 
       });
   }
 
-  // Only Unipile's own numbers: a calling station's is never in its list.
-  const listedIds = listed.map((account) => account.unipileAccountId);
-  const unipileOnly = eq(whatsappAccounts.provider, "unipile");
+  // Only this provider's own numbers: a calling station's is never in its list.
+  const listedIds = listed.map((account) => account.providerAccountId);
+  const providerOnly = eq(whatsappAccounts.provider, provider.key);
   await db
     .update(whatsappAccounts)
     .set({ status: "disconnected", lastSyncedAt: now, updatedAt: now })
     .where(listedIds.length
-      ? and(inOrg(whatsappAccounts), unipileOnly, notInArray(whatsappAccounts.unipileAccountId, listedIds), sql`${whatsappAccounts.status} <> 'disconnected'`)
-      : and(inOrg(whatsappAccounts), unipileOnly, sql`${whatsappAccounts.status} <> 'disconnected'`));
-
-  await ensureDefaultAccount();
-  return listWhatsappAccounts();
+      ? and(inOrg(whatsappAccounts), providerOnly, notInArray(whatsappAccounts.unipileAccountId, listedIds), sql`${whatsappAccounts.status} <> 'disconnected'`)
+      : and(inOrg(whatsappAccounts), providerOnly, sql`${whatsappAccounts.status} <> 'disconnected'`));
 }
 
 /**

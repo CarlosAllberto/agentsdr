@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { normalizePhone } from "@/lib/calls/phone";
 import { organizationPhoneCountry } from "@/lib/calls/phone.server";
 import { isPersonDoNotContact } from "@/lib/crm/policies";
-import { findUnipileWhatsappChat } from "@/services/unipile.whatsapp";
+import { getWhatsappProvider } from "./providers";
 import { findWhatsappAccountByUnipileId } from "./accounts";
 import { WhatsappSendRefusedError } from "./errors";
 import { chatInOrg, isPendingChatId, matchPersonByPhone } from "./messages";
@@ -85,9 +85,9 @@ export async function deliverWhatsappFromCrm(input: DeliverWhatsappInput): Promi
 
   let unipileChatId = sent.chat.unipileChatId;
   if (isPendingChatId(unipileChatId)) {
-    // Unipile sent it but named no chat; the first echo will. Until then the
-    // CRM keeps sending by number.
-    unipileChatId = (phone ? await findUnipileWhatsappChat(account.unipileAccountId, phone) : null) ?? "";
+    // The provider sent it but named no chat; the first echo will. Until then
+    // the CRM keeps sending by number.
+    unipileChatId = (phone ? await getWhatsappProvider(account.provider).findChat(account.unipileAccountId, phone) : null) ?? "";
   }
   return {
     unipileChatId,
