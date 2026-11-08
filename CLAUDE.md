@@ -646,6 +646,12 @@ Unipile" on /calling/accounts). Unipile account reads are split by provider:
 `src/services/unipile.whatsapp.ts` only WHATSAPP — keep them apart, and the
 account-status webhook runs each sync in its own try/catch.
 
+Send, delivery, backfill and account sync never call Unipile directly: they
+go through `src/lib/whatsapp/providers/` (`getWhatsappProvider(account.provider)`),
+an interface with one implementation per messaging provider. A calling
+station (`provider = 'station'`) is not a provider and never reaches it. A
+new provider is a new file there plus its key in the registry.
+
 Unipile posts every messaging event, LinkedIn and WhatsApp alike, to one
 webhook, `/api/webhooks/unipile-message`, which only routes by `account_type`
 to the WhatsApp handler (`/api/webhooks/whatsapp-message`) or, for a LinkedIn
