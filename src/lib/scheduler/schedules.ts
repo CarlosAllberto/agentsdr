@@ -20,6 +20,7 @@ export type PlatformJobName =
   | "linkedin-run-search-queue"
   | "linkedin-replay-webhooks"
   | "crm-auto-follow-ups"
+  | "whatsapp-zernio-poll"
   | "history-prune";
 
 export type PlatformJob = {
@@ -67,6 +68,14 @@ export const PLATFORM_JOBS: readonly PlatformJob[] = [
     schedule: everyMinutes(5),
     enabled: true,
     description: "Automatic CRM follow-ups, one per sending account at a time (sequences with automatic follow-ups on)",
+  },
+  {
+    // Zernio's webhooks cannot reach a desktop install, so replies are read
+    // from its inbox API instead (src/lib/whatsapp/zernioPoll.ts).
+    name: "whatsapp-zernio-poll",
+    schedule: everyMinutes(1),
+    enabled: true,
+    description: "Read new WhatsApp messages from Zernio (polling instead of webhooks)",
   },
   {
     name: "history-prune",

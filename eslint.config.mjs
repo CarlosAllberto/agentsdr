@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The Electron shell is its own package, typechecked by its own tsconfig.
+    "desktop/**",
   ]),
   {
     // scripts/*.js are the historical CommonJS migrations, run with plain

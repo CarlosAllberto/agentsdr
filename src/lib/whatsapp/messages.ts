@@ -386,6 +386,20 @@ export async function ingestWhatsappWebhook(payload: unknown, entries: WebhookLo
   return ingestMessageEvent(parsed, payload as Record<string, unknown>, log);
 }
 
+/**
+ * A message read from a provider's API (Zernio polling) instead of pushed by a
+ * webhook. Same path as a webhook delivery: dedupe on the provider id, echo
+ * matching for AgentSDR's own sends, the CRM for a known lead.
+ */
+export async function ingestPolledWhatsappMessage(
+  event: ParsedWhatsappMessageEvent,
+  raw: Record<string, unknown>,
+): Promise<{ outcome: WebhookOutcome; log: WebhookLog }> {
+  const entries: WebhookLog = [];
+  const outcome = await ingestMessageEvent(event, raw, logger(entries));
+  return { outcome, log: entries };
+}
+
 async function ingestMessageEvent(
   event: ParsedWhatsappMessageEvent,
   raw: Record<string, unknown>,
