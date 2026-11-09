@@ -39,6 +39,10 @@ env:
   NODE_OPTIONS: --max-old-space-size=6144
   # No paid certificates: never look for one in the keychain / store.
   CSC_IDENTITY_AUTO_DISCOVERY: "false"
+  # electron-builder skips signing on PR builds, which leaves the macOS app
+  # with Electron's broken stock signature ("AgentSDR is damaged"). The ad-hoc
+  # signature uses no secret, so PR builds sign too.
+  CSC_FOR_PULL_REQUEST: "true"
 
 jobs:
   build:
@@ -84,6 +88,13 @@ jobs:
       - name: Package
         working-directory: desktop
         run: npx electron-builder ${{ matrix.target }} --publish never
+      - name: Check the macOS signature
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: |
+          app=$(ls -d release/mac*/AgentSDR.app)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -E "Signature=adhoc|Identifier="
 
       - uses: actions/upload-artifact@v5
         with:

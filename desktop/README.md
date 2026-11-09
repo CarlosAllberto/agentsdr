@@ -57,7 +57,9 @@ installer (per-user, no admin needed) and an AppImage.
 
 They are not signed with a paid certificate yet. macOS gets an ad-hoc
 signature: the first time, right-click the app → Open (or System Settings →
-Privacy & Security → Open Anyway). Windows SmartScreen: More info → Run
+Privacy & Security → Open Anyway). If macOS says the app "is damaged", run
+`xattr -cr /Applications/AgentSDR.app` once (it removes the download
+quarantine). Builds before the ad-hoc signature fix need this. Windows SmartScreen: More info → Run
 anyway. Signing needs an Apple Developer ID (plus notarization) and a Windows
 code-signing certificate, passed to electron-builder as `CSC_LINK` /
 `CSC_KEY_PASSWORD` and `APPLE_*` secrets.
