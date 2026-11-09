@@ -1,0 +1,127 @@
+name: Desktop installers
+
+# Builds the AgentSDR desktop app (desktop/) on each OS it ships for. Run it
+# by hand (Actions → Desktop installers → Run workflow), on a PR that touches
+# the desktop app, or with a tag desktop-v<version> (push it, or create a
+# release with that tag on the Releases page), which attaches the installers
+# to that release.
+#
+# The builds are not signed with a paid certificate: macOS gets an ad-hoc
+# signature (first open: right-click → Open, or System Settings → Privacy &
+# Security → Open Anyway) and Windows shows SmartScreen's "More info → Run
+# anyway".
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Next build imports server modules that read these at load time; the
+  # values are throwaway. The app generates its real secrets on first run.
+  DATABASE_URL: postgres://agentsdr:agentsdr@localhost:5432/agentsdr
+  DATABASE_SSL: disable
+  BETTER_AUTH_SECRET: ci-only-not-a-secret-ci-only-not-a-secret
+  BETTER_AUTH_URL: http://localhost:3000
+  NEXT_PUBLIC_APP_URL: http://localhost:3000
+  INTEGRATION_CREDENTIALS_KEY: ci-only-not-a-secret-ci-only-not-a-secret
+  NEXT_TELEMETRY_DISABLED: "1"
+  NODE_OPTIONS: --max-old-space-size=6144
+  # No paid certificates: never look for one in the keychain / store.
+  CSC_IDENTITY_AUTO_DISCOVERY: "false"
+  # electron-builder skips signing on PR builds, which leaves the macOS app
+  # with Electron's broken stock signature ("AgentSDR is damaged"). The ad-hoc
+  # signature uses no secret, so PR builds sign too.
+  CSC_FOR_PULL_REQUEST: "true"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            target: --mac --arm64
+          - name: macOS (Intel)
+            os: macos-15-intel
+            target: --mac --x64
+          - name: Windows
+            os: windows-latest
+            target: --win --x64
+          - name: Linux
+            os: ubuntu-latest
+            target: --linux --x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install the app's dependencies
+        run: bun install --frozen-lockfile
+      - name: Build the Next.js server
+        run: bun run build
+      - name: Stage it for the desktop app
+        run: bun desktop/scripts/stage-app.ts
+
+      - name: Install the desktop package
+        working-directory: desktop
+        run: npm ci
+      - name: Compile the main process
+        working-directory: desktop
+        run: npm run build:main
+      - name: Package
+        working-directory: desktop
+        run: npx electron-builder ${{ matrix.target }} --publish never
+      - name: Check the macOS signature
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: |
+          app=$(ls -d release/mac*/AgentSDR.app)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -E "Signature=adhoc|Identifier="
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: AgentSDR-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.exe
+            desktop/release/*.AppImage
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: installers
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          # Uploads to the release of this tag, creating it if it does not exist
+          # (a release made on GitHub's Releases page creates the tag, which
+          # starts this run).
+          prerelease: true
+          files: installers/*

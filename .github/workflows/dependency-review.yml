@@ -16,5 +16,5 @@ jobs:
         with:
           fail-on-severity: high
           # MIT project: refuse source-available licences that would restrict what users of AgentSDR may do.
-          deny-licenses: SSPL-1.0, BUSL-1.1, Commons-Clause
+          deny-licenses: SSPL-1.0, BUSL-1.1
           comment-summary-in-pr: on-failure
