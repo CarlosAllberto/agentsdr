@@ -32,19 +32,25 @@
     },
     "files": [
       "dist/**",
+      "build/icon.png",
+      "build/tray.png",
+      "build/tray@2x.png",
       "package.json"
     ],
     "extraResources": [
       {
         "from": "app",
-        "to": "app"
+        "to": "bundle"
       }
     ],
     "mac": {
       "target": [
         "dmg"
       ],
-      "category": "public.app-category.business"
+      "category": "public.app-category.business",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "notarize": false
     },
     "win": {
       "target": [
@@ -57,7 +63,13 @@
       ],
       "category": "Office"
     },
-    "asar": false
+    "asar": false,
+    "artifactName": "AgentSDR-${version}-${os}-${arch}.${ext}",
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    },
+    "publish": null
   },
   "type": "module"
 }

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { accessSync, appendFileSync, constants, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { accessSync, appendFileSync, constants, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,7 +17,7 @@ import { loadSecrets } from "./secrets.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** The staged server and db/ folder: inside the installed app, or desktop/app in development. */
-const resources = app.isPackaged ? join(process.resourcesPath, "app") : join(here, "..", "app");
+const resources = app.isPackaged ? join(process.resourcesPath, "bundle") : join(here, "..", "app");
 
 let database: RunningDatabase | null = null;
 let server: ChildProcess | null = null;
@@ -74,24 +74,37 @@ async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
 /**
  * Next.js writes its caches (optimized images, fetch cache) under
  * .next/cache beside the server. Where the installed app is read-only (an
- * AppImage, a system-wide install) the server runs from a copy in the app-data
- * folder, made once per app version.
+ * AppImage, a system-wide install) or must stay unchanged (a macOS .app,
+ * whose signature covers its files) the server runs from a copy in the
+ * app-data folder, made once per app version; copies of older versions are
+ * removed.
  */
 function serverDir(): string {
   const installed = join(resources, "server");
   if (!existsSync(join(installed, "server.js"))) throw new Error(`The app server is missing (${installed}). Run "npm run build:app" in desktop/ first.`);
-  try {
-    accessSync(join(installed, ".next"), constants.W_OK);
-    return installed;
-  } catch {
-    const copy = join(app.getPath("userData"), `server-${app.getVersion()}`);
-    if (!existsSync(join(copy, "server.js"))) {
-      log(`[desktop] the app folder is read-only; copying the server to ${copy}`);
-      rmSync(copy, { recursive: true, force: true });
-      cpSync(installed, copy, { recursive: true });
+  if (!(app.isPackaged && process.platform === "darwin")) {
+    try {
+      accessSync(join(installed, ".next"), constants.W_OK);
+      return installed;
+    } catch {
+      // Read-only: use a copy.
     }
-    return copy;
   }
+  const userData = app.getPath("userData");
+  const name = `server-${app.getVersion()}`;
+  const copy = join(userData, name);
+  if (!existsSync(join(copy, "server.js"))) {
+    log(`[desktop] copying the server to ${copy}`);
+    const partial = `${copy}.partial`;
+    rmSync(partial, { recursive: true, force: true });
+    cpSync(installed, partial, { recursive: true, verbatimSymlinks: true });
+    rmSync(copy, { recursive: true, force: true });
+    renameSync(partial, copy);
+  }
+  for (const entry of readdirSync(userData)) {
+    if (entry.startsWith("server-") && entry !== name) rmSync(join(userData, entry), { recursive: true, force: true });
+  }
+  return copy;
 }
 
 function startServer(port: number, env: Record<string, string>): ChildProcess {
@@ -126,6 +139,7 @@ function openWindow(): void {
     minWidth: 1024,
     minHeight: 680,
     title: "AgentSDR",
+    icon: join(here, "..", "build", "icon.png"),
     show: false,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
