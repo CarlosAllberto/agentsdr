@@ -2,8 +2,9 @@ name: Desktop installers
 
 # Builds the AgentSDR desktop app (desktop/) on each OS it ships for. Run it
 # by hand (Actions → Desktop installers → Run workflow), on a PR that touches
-# the desktop app, or by pushing a tag desktop-v<version>, which also attaches
-# the installers to a draft GitHub release.
+# the desktop app, or with a tag desktop-v<version> (push it, or create a
+# release with that tag on the Releases page), which attaches the installers
+# to that release.
 #
 # The builds are not signed with a paid certificate: macOS gets an ad-hoc
 # signature (first open: right-click → Open, or System Settings → Privacy &
@@ -119,5 +120,8 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          # Uploads to the release of this tag, creating it if it does not exist
+          # (a release made on GitHub's Releases page creates the tag, which
+          # starts this run).
+          prerelease: true
           files: installers/*
